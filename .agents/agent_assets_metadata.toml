@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "Xdq4SqUctG7q8ks2rJK7E"
+uri = "file://cleandroid-review.zip"
+type = "unspecified"
+title = "CleanDroid Source Code"
