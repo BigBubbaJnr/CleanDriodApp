@@ -1,0 +1,45 @@
+CleanDroid Development Review
+The current app has a strong UI, good architecture, and a unique identity. Do not redesign the app or change the terminal/CRT aesthetic. Keep the existing layout, components and overall structure.
+The next stage of development should focus on replacing placeholder functionality with real Android features.
+Highest Priority
+Replace all mock/generated scan results with genuine filesystem scanning.
+Never display fake junk files or fake cleaning results.
+If Android restrictions prevent a feature from working, redesign the feature instead of simulating it.
+Improve Existing Features
+Junk Cleaner should scan for real APKs, old downloads, ZIPs, empty folders, temporary files and other legitimate storage waste.
+Improve Duplicate Finder by grouping duplicate photos, videos and media together.
+Expand Large File Scanner with sorting, filtering and search.
+Improve App Manager with app size, last opened, install date and storage usage where possible.
+New Features
+Storage Intelligence (break down storage by Downloads, Images, Videos, APKs, Archives, etc.)
+Download Folder Analysis
+Screenshot Manager
+Storage History / Timeline showing storage changes over time.
+Better storage insights instead of only showing total junk size.
+Scanning Experience
+Keep the terminal theme but make scanning feel more alive:
+Live terminal logs
+Animated progress
+Real-time counters
+Better loading animations
+Performance
+Scan asynchronously.
+Never freeze the UI.
+Optimise scanning where possible.
+Request only the permissions that are actually required.
+Android Compatibility
+Modern Android limits what cleaner apps can do.
+Do not claim to clean caches or system files if Android doesn't allow it.
+Instead, focus on becoming the best storage analyser and maintenance tool rather than trying to imitate CCleaner.
+Advertising
+Prepare the app for AdMob integration but keep advertising minimal:
+One banner on the dashboard.
+Optional interstitial after completed scans.
+No paywalls.
+No intrusive ads.
+Overall Goal
+CleanDroid should become the most trustworthy free Android storage management app available.
+Focus on real functionality, transparency, performance and useful storage analysis instead of fake scans or unnecessary features.
+One more thing I'd ask Replit
+At the end, I'd add this sentence:
+Before making changes, review the existing codebase and provide your own assessment of the app's current strengths, weaknesses and limitations. Then implement the improvements in small stages rather than rewriting the project.

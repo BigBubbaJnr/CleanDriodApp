@@ -27,6 +27,8 @@ function RootLayoutNav() {
       <Stack.Screen name="duplicate-finder" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="large-files" options={{ headerShown: false, presentation: 'card' }} />
       <Stack.Screen name="app-cache" options={{ headerShown: false, presentation: 'card' }} />
+      <Stack.Screen name="storage-intel" options={{ headerShown: false, presentation: 'card' }} />
+      <Stack.Screen name="screenshot-manager" options={{ headerShown: false, presentation: 'card' }} />
     </Stack>
   );
 }

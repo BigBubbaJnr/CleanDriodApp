@@ -133,9 +133,9 @@ export default function HomeScreen() {
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
   const usedPct = storageStats
-    ? (storageStats.usedSpace - storageStats.junkEstimate) / storageStats.totalSpace
+    ? (storageStats.usedSpace - storageStats.appCacheSize) / storageStats.totalSpace
     : 0;
-  const junkPct = storageStats ? storageStats.junkEstimate / storageStats.totalSpace : 0;
+  const junkPct = storageStats ? storageStats.appCacheSize / storageStats.totalSpace : 0;
 
   return (
     <ScrollView
@@ -187,7 +187,7 @@ export default function HomeScreen() {
           <StorageRingChart
             totalSpace={storageStats.totalSpace}
             usedSpace={storageStats.usedSpace}
-            junkSize={storageStats.junkEstimate}
+            junkSize={storageStats.appCacheSize}
           />
         ) : (
           <View style={styles.loading}>
@@ -206,7 +206,7 @@ export default function HomeScreen() {
       {storageStats && (
         <View style={styles.statRow}>
           {[
-            { label: 'JUNK', value: formatBytes(storageStats.junkEstimate), color: colors.accent, pct: junkPct },
+            { label: 'CACHE', value: formatBytes(storageStats.appCacheSize), color: colors.accent, pct: junkPct },
             { label: 'FREED', value: formatBytes(totalBytesFreed), color: colors.primary, pct: Math.min(1, totalBytesFreed / (storageStats.totalSpace || 1)) },
             { label: 'SCANS', value: String(history.length), color: colors.success, pct: Math.min(1, history.length / 20) },
           ].map(s => (

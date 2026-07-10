@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -10,20 +10,38 @@ import {
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
-import { useCleaner } from '@/context/CleanerContext';
+import { useCleaner, estimateImageSize, estimateVideoSize } from '@/context/CleanerContext';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+type JunkCategory = 'app_cache' | 'download' | 'large_video';
 
 interface JunkItem {
   id: string;
   name: string;
   size: number;
-  category: 'apk' | 'empty_folder' | 'temp' | 'download';
+  category: JunkCategory;
   selected: boolean;
+  assetId?: string;       // MediaLibrary asset ID
+  isOwnCache?: boolean;   // FileSystem own-cache item
+  sizeIsEstimated?: boolean;
 }
+
+const CAT_LABELS: Record<JunkCategory, string> = {
+  app_cache: 'APP CACHE',
+  download: 'DOWNLOAD',
+  large_video: 'OLD VIDEO',
+};
+
+const CAT_ICONS: Record<JunkCategory, keyof typeof Feather.glyphMap> = {
+  app_cache: 'cpu',
+  download: 'download',
+  large_video: 'film',
+};
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
@@ -31,36 +49,6 @@ function formatBytes(bytes: number): string {
   return (bytes / 1024).toFixed(0) + ' KB';
 }
 
-const CAT_LABELS: Record<string, string> = {
-  apk: 'OLD APK',
-  empty_folder: 'EMPTY DIR',
-  temp: 'TEMP FILE',
-  download: 'LEFTOVER DL',
-};
-
-const CAT_ICONS: Record<string, keyof typeof Feather.glyphMap> = {
-  apk: 'package',
-  empty_folder: 'folder',
-  temp: 'file',
-  download: 'download',
-};
-
-function generateMockJunk(): JunkItem[] {
-  return [
-    { id: '1', name: 'WhatsApp_2024.apk', size: 48 * 1024 * 1024, category: 'apk', selected: true },
-    { id: '2', name: 'update_backup.apk', size: 32 * 1024 * 1024, category: 'apk', selected: true },
-    { id: '3', name: 'com.android.gallery/.cache', size: 0, category: 'empty_folder', selected: true },
-    { id: '4', name: '.tmp_download_3847', size: 2.1 * 1024 * 1024, category: 'temp', selected: true },
-    { id: '5', name: '.tmp_extract_1293', size: 1.4 * 1024 * 1024, category: 'temp', selected: true },
-    { id: '6', name: 'video_download_old.mp4.part', size: 89 * 1024 * 1024, category: 'download', selected: true },
-    { id: '7', name: 'document_temp.pdf', size: 4.7 * 1024 * 1024, category: 'download', selected: true },
-    { id: '8', name: 'log_backup_2024.txt', size: 12 * 1024 * 1024, category: 'temp', selected: true },
-    { id: '9', name: '.empty_screenshots', size: 0, category: 'empty_folder', selected: true },
-    { id: '10', name: 'instagram_cache_old.apk', size: 56 * 1024 * 1024, category: 'apk', selected: true },
-  ];
-}
-
-/** Retro segmented progress bar */
 function SegBar({ value, color, total = 24 }: { value: number; color: string; total?: number }) {
   const colors = useColors();
   const filled = Math.max(0, Math.min(total, Math.round(value * total)));
@@ -73,27 +61,26 @@ function SegBar({ value, color, total = 24 }: { value: number; color: string; to
   );
 }
 
-/** Retro scan ticker — cycles through fake filenames while scanning */
-function ScanTicker({ active }: { active: boolean }) {
+/** Live terminal log box */
+function TerminalLog({ lines }: { lines: string[] }) {
   const colors = useColors();
-  const lines = [
-    'checking /data/local/tmp...',
-    'reading /sdcard/Downloads...',
-    'scanning residual APKs...',
-    'checking /cache/dalvik...',
-    'reading temp directories...',
-    'scanning .nomedia folders...',
-  ];
-  const [idx, setIdx] = useState(0);
+  const scrollRef = useRef<ScrollView>(null);
   useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => setIdx(i => (i + 1) % lines.length), 500);
-    return () => clearInterval(id);
-  }, [active]);
+    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
+  }, [lines.length]);
   return (
-    <Text style={[styles.tickerLine, { color: colors.mutedForeground }]} numberOfLines={1}>
-      {'> '}{lines[idx]}
-    </Text>
+    <ScrollView
+      ref={scrollRef}
+      style={[styles.termBox, { backgroundColor: colors.muted, borderColor: colors.border }]}
+      contentContainerStyle={{ padding: 10, gap: 3 }}
+      showsVerticalScrollIndicator={false}
+    >
+      {lines.map((line, i) => (
+        <Text key={i} style={[styles.termLine, { color: colors.mutedForeground }]}>
+          {line}
+        </Text>
+      ))}
+    </ScrollView>
   );
 }
 
@@ -105,29 +92,176 @@ export default function JunkCleanerScreen() {
   const [phase, setPhase] = useState<'idle' | 'scanning' | 'results' | 'cleaning' | 'done'>('idle');
   const [items, setItems] = useState<JunkItem[]>([]);
   const [scanProgress, setScanProgress] = useState(0);
+  const [scanLog, setScanLog] = useState<string[]>([]);
   const [bytesFreed, setBytesFreed] = useState(0);
 
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
+  const addLog = useCallback((msg: string) => {
+    setScanLog(prev => [...prev, `> ${msg}`]);
+  }, []);
+
   const startScan = useCallback(async () => {
     setPhase('scanning');
     setScanProgress(0);
+    setScanLog([]);
+    const found: JunkItem[] = [];
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
+    // ── Step 1: Own app cache ──────────────────────────
+    addLog('checking app cache directory...');
+    setScanProgress(10);
     try {
-      await FileSystem.getInfoAsync(FileSystem.cacheDirectory!);
-    } catch {}
-
-    for (let i = 0; i <= 100; i += 8) {
-      await new Promise(r => setTimeout(r, 110));
-      setScanProgress(Math.min(i, 100));
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const cacheInfo = await FileSystem.getInfoAsync(FileSystem.cacheDirectory!, { size: true } as any);
+      const cacheSize = (cacheInfo as any).size ?? 0;
+      if (cacheSize > 0) {
+        addLog(`app cache: ${formatBytes(cacheSize)}`);
+        found.push({
+          id: 'own_cache',
+          name: 'App Cache (CleanDroid)',
+          size: cacheSize,
+          category: 'app_cache',
+          selected: true,
+          isOwnCache: true,
+        });
+      } else {
+        addLog('app cache is empty');
+      }
+    } catch {
+      addLog('could not read app cache');
     }
 
-    setItems(generateMockJunk());
+    setScanProgress(20);
+
+    // ── Step 2: MediaLibrary ───────────────────────────
+    if (Platform.OS === 'web') {
+      addLog('[web] media library not available in browser preview');
+      setScanProgress(100);
+      setItems(found);
+      setPhase(found.length > 0 ? 'results' : 'results');
+      return;
+    }
+
+    addLog('requesting media library access...');
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') {
+      addLog('[!] media access denied — only app cache scanned');
+      setScanProgress(100);
+      setItems(found);
+      setPhase('results');
+      return;
+    }
+
+    setScanProgress(30);
+
+    // ── Step 3: Downloads album ───────────────────────
+    addLog('looking for Downloads album...');
+    try {
+      const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
+      const dlAlbum = albums.find(a =>
+        a.title.toLowerCase() === 'download' || a.title.toLowerCase() === 'downloads'
+      );
+
+      if (dlAlbum && dlAlbum.assetCount > 0) {
+        addLog(`Downloads album: ${dlAlbum.assetCount} items — scanning...`);
+        // Paginate through all download assets (cap at 3000 to protect UI)
+        let dlAll: MediaLibrary.Asset[] = [];
+        let dlCursor: string | undefined;
+        do {
+          const page = await MediaLibrary.getAssetsAsync({
+            first: 500,
+            after: dlCursor,
+            album: dlAlbum,
+            mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+          });
+          dlAll = [...dlAll, ...page.assets];
+          dlCursor = page.hasNextPage ? page.endCursor : undefined;
+        } while (dlCursor && dlAll.length < 3000);
+        if (dlCursor) addLog(`[!] large library — checked first ${dlAll.length} downloads`);
+        setScanProgress(55);
+
+        let dlFound = 0;
+        for (const asset of dlAll) {
+          const size = asset.mediaType === MediaLibrary.MediaType.video
+            ? estimateVideoSize(asset.duration)
+            : estimateImageSize(asset.width, asset.height);
+          // Only flag downloads larger than 30 MB as potential junk
+          if (size >= 30 * 1024 * 1024) {
+            found.push({
+              id: `dl_${asset.id}`,
+              name: asset.filename,
+              size,
+              category: 'download',
+              selected: false,
+              assetId: asset.id,
+              sizeIsEstimated: true,
+            });
+            dlFound++;
+          }
+        }
+        addLog(`found ${dlFound} large items in Downloads (>30 MB each)`);
+      } else {
+        addLog('no Downloads album found');
+      }
+    } catch {
+      addLog('could not scan Downloads album');
+    }
+
+    setScanProgress(65);
+
+    // ── Step 4: Old large videos ──────────────────────
+    addLog('scanning for old large videos...');
+    try {
+      const ninetyDaysAgo = Date.now() - 90 * 24 * 60 * 60 * 1000;
+      const videos = await MediaLibrary.getAssetsAsync({
+        first: 500,
+        mediaType: [MediaLibrary.MediaType.video],
+        sortBy: [MediaLibrary.SortBy.creationTime],
+      });
+
+      setScanProgress(85);
+      let oldVideoCount = 0;
+      for (const v of videos.assets) {
+        const size = estimateVideoSize(v.duration);
+        const createdMs = v.creationTime * 1000;
+        // Flag: estimated > 200 MB and older than 90 days
+        if (size >= 200 * 1024 * 1024 && createdMs < ninetyDaysAgo) {
+          found.push({
+            id: `vid_${v.id}`,
+            name: v.filename,
+            size,
+            category: 'large_video',
+            selected: false,
+            assetId: v.id,
+            sizeIsEstimated: true,
+          });
+          oldVideoCount++;
+        }
+      }
+      addLog(`found ${oldVideoCount} old large videos (>200 MB, >90 days old)`);
+    } catch {
+      addLog('could not scan video library');
+    }
+
+    setScanProgress(100);
+
+    // Deduplicate by assetId — an asset can appear in both 'download' and 'large_video'
+    const seenAssets = new Set<string>();
+    const deduped = found.filter(item => {
+      if (!item.assetId) return true; // own-cache items have no assetId, always keep
+      if (seenAssets.has(item.assetId)) return false;
+      seenAssets.add(item.assetId);
+      return true;
+    });
+    addLog(`scan complete — ${deduped.length} unique item${deduped.length !== 1 ? 's' : ''} found`);
+    await new Promise(r => setTimeout(r, 300));
+
+    setItems(deduped);
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, []);
+  }, [addLog]);
 
   const toggleItem = (id: string) =>
     setItems(prev => prev.map(i => i.id === id ? { ...i, selected: !i.selected } : i));
@@ -145,20 +279,44 @@ export default function JunkCleanerScreen() {
     if (selectedItems.length === 0) return;
     setPhase('cleaning');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    try { await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true }); } catch {}
-    await new Promise(r => setTimeout(r, 1500));
-    setBytesFreed(selectedSize);
-    await addHistoryItem({
-      date: new Date().toISOString(),
-      bytesFreed: selectedSize,
-      type: 'junk',
-      label: `Junk Cleaner — ${selectedItems.length} items`,
-    });
+
+    let bytesActuallyFreed = 0;
+    let itemsActuallyRemoved = 0;
+
+    // Delete own app cache
+    const cacheItems = selectedItems.filter(i => i.isOwnCache);
+    if (cacheItems.length > 0) {
+      try {
+        await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true });
+        bytesActuallyFreed += cacheItems.reduce((acc, i) => acc + i.size, 0);
+        itemsActuallyRemoved += cacheItems.length;
+      } catch {}
+    }
+
+    // Delete MediaLibrary items — record bytes only on success
+    const mediaItems = selectedItems.filter(i => i.assetId);
+    if (mediaItems.length > 0 && Platform.OS !== 'web') {
+      try {
+        await MediaLibrary.deleteAssetsAsync(mediaItems.map(i => i.assetId!));
+        bytesActuallyFreed += mediaItems.reduce((acc, i) => acc + i.size, 0);
+        itemsActuallyRemoved += mediaItems.length;
+      } catch {}
+    }
+
+    await new Promise(r => setTimeout(r, 800));
+    setBytesFreed(bytesActuallyFreed);
+    if (bytesActuallyFreed > 0 || itemsActuallyRemoved > 0) {
+      await addHistoryItem({
+        date: new Date().toISOString(),
+        bytesFreed: bytesActuallyFreed,
+        type: 'junk',
+        label: `Junk Cleaner — ${itemsActuallyRemoved} item${itemsActuallyRemoved !== 1 ? 's' : ''} removed`,
+      });
+    }
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  // Bevel helpers
   const bevelRaised = {
     borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
     borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
@@ -201,12 +359,12 @@ export default function JunkCleanerScreen() {
               <Feather name="trash-2" size={44} color={colors.primary} />
             </View>
             <Text style={[styles.idleTitle, { color: colors.foreground }]}>JUNK CLEANER</Text>
-            <View style={[styles.idleInfoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
-              {['Old APK installers', 'Empty folders', 'Temp files', 'Partial downloads'].map(line => (
-                <Text key={line} style={[styles.idleInfoLine, { color: colors.mutedForeground }]}>
-                  {'[+] '}{line}
-                </Text>
-              ))}
+            <View style={[styles.infoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
+              <Text style={[styles.infoTitle, { color: colors.primary }]}>{'[SCANS FOR]'}</Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>{'[+] '} Own app cache (deletable directly)</Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>{'[+] Large items in Downloads album (>30 MB)'}</Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>{'[+] Old large videos (>200 MB, >90 days)'}</Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>{'[i] '} Video/image sizes are estimated</Text>
             </View>
             <Pressable onPress={startScan} style={styles.fullWidth}>
               <View style={[styles.primaryBtn, {
@@ -216,9 +374,7 @@ export default function JunkCleanerScreen() {
                 borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
               }]}>
                 <Feather name="search" size={16} color={colors.primaryForeground} />
-                <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>
-                  {'>> START SCAN'}
-                </Text>
+                <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>{'>> START SCAN'}</Text>
               </View>
             </Pressable>
           </Animated.View>
@@ -227,71 +383,87 @@ export default function JunkCleanerScreen() {
         {/* ── SCANNING ── */}
         {phase === 'scanning' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.scanningBox, bevelRaised, { backgroundColor: colors.card }]}>
-              <Text style={[styles.scanningTitle, { color: colors.primary }]}>
-                {'[SCANNING...]'}
-              </Text>
-              <Text style={[styles.scanningPct, { color: colors.primary }]}>
+            <View style={[styles.scanBox, bevelRaised, { backgroundColor: colors.card }]}>
+              <Text style={[styles.scanTitle, { color: colors.primary }]}>{'[SCANNING...]'}</Text>
+              <Text style={[styles.scanPct, { color: colors.primary }]}>
                 {String(scanProgress).padStart(3, '0')}%
               </Text>
               <SegBar value={scanProgress / 100} color={colors.primary} />
-              <ScanTicker active />
             </View>
+            <TerminalLog lines={scanLog} />
           </Animated.View>
         )}
 
         {/* ── RESULTS / CLEANING ── */}
-        {(phase === 'results' || phase === 'cleaning') && items.length > 0 && (
+        {(phase === 'results' || phase === 'cleaning') && (
           <Animated.View entering={FadeIn}>
-            {/* Summary readout */}
+            {/* Summary */}
             <View style={[styles.summaryPanel, bevelRaised, { backgroundColor: colors.card }]}>
               <Text style={[styles.summaryHead, { color: colors.primary }]}>{'[SCAN COMPLETE]'}</Text>
               <View style={styles.summaryRow}>
-                <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>TOTAL_JUNK</Text>
-                <Text style={[styles.summarySep, { color: colors.border }]}>{' = '}</Text>
-                <Text style={[styles.summaryVal, { color: colors.accent }]}>{formatBytes(totalSize)}</Text>
-              </View>
-              <View style={styles.summaryRow}>
-                <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>FILES_FOUND</Text>
+                <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>ITEMS_FOUND</Text>
                 <Text style={[styles.summarySep, { color: colors.border }]}>{' = '}</Text>
                 <Text style={[styles.summaryVal, { color: colors.foreground }]}>{items.length}</Text>
               </View>
+              <View style={styles.summaryRow}>
+                <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>TOTAL_SIZE</Text>
+                <Text style={[styles.summarySep, { color: colors.border }]}>{' = '}</Text>
+                <Text style={[styles.summaryVal, { color: colors.accent }]}>~{formatBytes(totalSize)}</Text>
+              </View>
             </View>
 
-            {/* File list */}
-            <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
-              {items.map((item, idx) => (
-                <Pressable
-                  key={item.id}
-                  style={[
-                    styles.itemRow,
-                    idx < items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
-                    item.selected && { backgroundColor: colors.primary + '08' },
-                  ]}
-                  onPress={() => toggleItem(item.id)}
-                >
-                  {/* Square checkbox */}
-                  <View style={[styles.checkbox, {
-                    backgroundColor: item.selected ? colors.primary : 'transparent',
-                    borderColor: item.selected ? colors.primary : colors.border,
-                  }]}>
-                    {item.selected && <Text style={styles.checkMark}>✓</Text>}
-                  </View>
-                  {/* Icon */}
-                  <View style={[styles.itemIconBox, { borderColor: colors.border }]}>
-                    <Feather name={CAT_ICONS[item.category]} size={14} color={colors.mutedForeground} />
-                  </View>
-                  {/* Info */}
-                  <View style={styles.itemContent}>
-                    <Text style={[styles.itemName, { color: colors.foreground }]} numberOfLines={1}>{item.name}</Text>
-                    <Text style={[styles.itemCat, { color: colors.mutedForeground }]}>{CAT_LABELS[item.category]}</Text>
-                  </View>
-                  <Text style={[styles.itemSize, { color: item.selected ? colors.primary : colors.mutedForeground }]}>
-                    {item.size > 0 ? formatBytes(item.size) : '0 B'}
-                  </Text>
-                </Pressable>
-              ))}
-            </View>
+            {items.length === 0 ? (
+              <View style={[styles.emptyPanel, bevelRaised, { backgroundColor: colors.card }]}>
+                <Text style={[styles.emptyText, { color: colors.success }]}>{'[OK] DEVICE IS CLEAN'}</Text>
+                <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
+                  No junk found within accessible storage areas
+                </Text>
+              </View>
+            ) : (
+              <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
+                {items.map((item, idx) => (
+                  <Pressable
+                    key={item.id}
+                    style={[
+                      styles.itemRow,
+                      idx < items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                      item.selected && { backgroundColor: colors.primary + '08' },
+                    ]}
+                    onPress={() => toggleItem(item.id)}
+                  >
+                    <View style={[styles.checkbox, {
+                      backgroundColor: item.selected ? colors.primary : 'transparent',
+                      borderColor: item.selected ? colors.primary : colors.border,
+                    }]}>
+                      {item.selected && <Text style={styles.checkMark}>✓</Text>}
+                    </View>
+                    <View style={[styles.itemIconBox, { borderColor: colors.border }]}>
+                      <Feather name={CAT_ICONS[item.category]} size={13} color={colors.mutedForeground} />
+                    </View>
+                    <View style={styles.itemContent}>
+                      <Text style={[styles.itemName, { color: colors.foreground }]} numberOfLines={1}>
+                        {item.name}
+                      </Text>
+                      <Text style={[styles.itemCat, { color: colors.mutedForeground }]}>
+                        {CAT_LABELS[item.category]}
+                        {item.sizeIsEstimated ? ' · EST. SIZE' : ''}
+                      </Text>
+                    </View>
+                    <Text style={[styles.itemSize, { color: item.selected ? colors.primary : colors.mutedForeground }]}>
+                      {item.sizeIsEstimated ? '~' : ''}{formatBytes(item.size)}
+                    </Text>
+                  </Pressable>
+                ))}
+              </View>
+            )}
+
+            {/* Terminal log (collapsed) */}
+            {scanLog.length > 0 && (
+              <View style={{ marginTop: 12 }}>
+                <Text style={[styles.logLabel, { color: colors.mutedForeground }]}>{'── SCAN LOG ──────────────────────'}</Text>
+                <TerminalLog lines={scanLog} />
+              </View>
+            )}
           </Animated.View>
         )}
 
@@ -300,15 +472,15 @@ export default function JunkCleanerScreen() {
           <Animated.View entering={FadeIn} style={styles.center}>
             <View style={[styles.doneBox, bevelRaised, { backgroundColor: colors.card }]}>
               <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] CLEAN COMPLETE'}</Text>
-              <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(bytesFreed)}</Text>
+              <Text style={[styles.doneBytes, { color: colors.primary }]}>~{formatBytes(bytesFreed)}</Text>
               <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED FROM DEVICE</Text>
             </View>
-            <Pressable onPress={() => { setPhase('idle'); setItems([]); }} style={styles.fullWidth}>
+            <Pressable onPress={() => { setPhase('idle'); setItems([]); setScanLog([]); }} style={styles.fullWidth}>
               <View style={[styles.outlineBtn, {
-                borderColor: colors.border, backgroundColor: colors.card,
                 borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
                 borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
                 borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+                backgroundColor: colors.card,
               }]}>
                 <Text style={[styles.outlineBtnText, { color: colors.foreground }]}>{'>> SCAN AGAIN'}</Text>
               </View>
@@ -318,14 +490,14 @@ export default function JunkCleanerScreen() {
       </ScrollView>
 
       {/* ── Footer ── */}
-      {(phase === 'results' || phase === 'cleaning') && (
+      {(phase === 'results' || phase === 'cleaning') && items.length > 0 && (
         <View style={[styles.footer, {
           paddingBottom: insets.bottom + 16 + webBottomPad,
           backgroundColor: colors.background,
           borderTopColor: colors.primary + '40',
         }]}>
           <Text style={[styles.footerSub, { color: colors.mutedForeground }]}>
-            {selectedItems.length} SELECTED  ·  {formatBytes(selectedSize)}
+            {selectedItems.length} SELECTED  ·  ~{formatBytes(selectedSize)}
           </Text>
           <Pressable
             onPress={handleClean}
@@ -368,13 +540,14 @@ const styles = StyleSheet.create({
   selectAllBtn: { paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1 },
   selectAllText: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 1.5 },
   content: { padding: 16, gap: 12 },
-  center: { alignItems: 'center', paddingTop: 40, gap: 16 },
+  center: { alignItems: 'center', paddingTop: 32, gap: 16 },
   fullWidth: { width: '100%' },
 
   idleIconBox: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
   idleTitle: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
-  idleInfoBox: { width: '100%', borderWidth: 1, padding: 14, gap: 6 },
-  idleInfoLine: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+  infoBox: { width: '100%', borderWidth: 1, padding: 12, gap: 5 },
+  infoTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },
+  infoLine: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
 
   primaryBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -382,17 +555,23 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
 
-  scanningBox: { width: '100%', padding: 20, gap: 14 },
-  scanningTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
-  scanningPct: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
-  tickerLine: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+  scanBox: { width: '100%', padding: 20, gap: 14 },
+  scanTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  scanPct: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
 
-  summaryPanel: { padding: 14, gap: 6, marginBottom: 10 },
-  summaryHead: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 6 },
+  termBox: { width: '100%', maxHeight: 160, borderWidth: 1 },
+  termLine: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
+
+  summaryPanel: { padding: 14, gap: 6 },
+  summaryHead: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },
   summaryRow: { flexDirection: 'row' },
   summaryKey: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, width: 120 },
   summarySep: { fontSize: 11, fontFamily: 'Inter_400Regular' },
-  summaryVal: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+  summaryVal: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+
+  emptyPanel: { padding: 28, alignItems: 'center', gap: 8 },
+  emptyText: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  emptyDesc: { fontSize: 11, fontFamily: 'Inter_400Regular', textAlign: 'center', lineHeight: 18 },
 
   listPanel: { overflow: 'hidden' },
   itemRow: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
@@ -403,6 +582,8 @@ const styles = StyleSheet.create({
   itemName: { fontSize: 12, fontFamily: 'Inter_500Medium' },
   itemCat: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 1, marginTop: 2 },
   itemSize: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+
+  logLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 6 },
 
   doneBox: { width: '100%', padding: 24, gap: 10, alignItems: 'center' },
   doneHead: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },

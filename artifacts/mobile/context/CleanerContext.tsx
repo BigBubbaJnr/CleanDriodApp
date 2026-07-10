@@ -1,12 +1,14 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import * as MediaLibrary from 'expo-media-library';
+import { Platform } from 'react-native';
 
 export interface CleanHistoryItem {
   id: string;
   date: string;
   bytesFreed: number;
-  type: 'junk' | 'duplicates' | 'large_files' | 'cache' | 'full';
+  type: 'junk' | 'duplicates' | 'large_files' | 'cache' | 'full' | 'screenshots';
   label: string;
 }
 
@@ -20,17 +22,51 @@ export interface StorageStats {
   totalSpace: number;
   usedSpace: number;
   freeSpace: number;
-  junkEstimate: number;
+  /** Bytes of own app cache — real, not estimated */
+  appCacheSize: number;
+}
+
+export interface MediaBreakdown {
+  images: { count: number; size: number };
+  videos: { count: number; size: number };
+  audio: { count: number; size: number };
+  screenshots: { count: number; size: number };
+  downloads: { count: number; size: number };
+  appCache: { size: number };
+  totalScanned: number;
+  /** Sizes are estimates derived from dimensions/duration — not exact file sizes */
+  sizesAreEstimated: true;
+  lastScanned: string | null;
+}
+
+/** Estimate image bytes from dimensions (JPEG ~20:1 compression from raw RGB) */
+export function estimateImageSize(width: number, height: number): number {
+  return Math.round(width * height * 0.2);
+}
+
+/** Estimate video bytes from duration (assumes ~4 Mbps average mobile bitrate) */
+export function estimateVideoSize(durationSeconds: number): number {
+  return Math.round(Math.max(1, durationSeconds) * 4_000_000 / 8);
+}
+
+/** Estimate audio bytes from duration (assumes ~128 kbps) */
+export function estimateAudioSize(durationSeconds: number): number {
+  return Math.round(Math.max(1, durationSeconds) * 128_000 / 8);
 }
 
 interface CleanerContextType {
   storageStats: StorageStats | null;
   isLoadingStats: boolean;
+  mediaBreakdown: MediaBreakdown | null;
   history: CleanHistoryItem[];
   totalBytesFreed: number;
   scheduleSettings: ScheduleSettings;
   rootEnabled: boolean;
   refreshStats: () => Promise<void>;
+  scanMediaLibrary: (
+    onProgress?: (pct: number) => void,
+    onLog?: (msg: string) => void
+  ) => Promise<MediaBreakdown | null>;
   addHistoryItem: (item: Omit<CleanHistoryItem, 'id'>) => Promise<void>;
   updateSchedule: (settings: Partial<ScheduleSettings>) => Promise<void>;
   setRootEnabled: (enabled: boolean) => Promise<void>;
@@ -51,9 +87,20 @@ const DEFAULT_SCHEDULE: ScheduleSettings = {
   lastRun: null,
 };
 
+/** Get real own-cache directory size */
+async function getOwnCacheSize(): Promise<number> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const info = await FileSystem.getInfoAsync(FileSystem.cacheDirectory!, { size: true } as any);
+    if (info.exists) return (info as any).size ?? 0;
+  } catch {}
+  return 0;
+}
+
 export function CleanerProvider({ children }: { children: React.ReactNode }) {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
+  const [mediaBreakdown, setMediaBreakdown] = useState<MediaBreakdown | null>(null);
   const [history, setHistory] = useState<CleanHistoryItem[]>([]);
   const [totalBytesFreed, setTotalBytesFreed] = useState(0);
   const [scheduleSettings, setScheduleSettings] = useState<ScheduleSettings>(DEFAULT_SCHEDULE);
@@ -62,26 +109,159 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   const refreshStats = useCallback(async () => {
     setIsLoadingStats(true);
     try {
-      const [freeSpace, totalSpace] = await Promise.all([
+      const [freeSpace, totalSpace, appCacheSize] = await Promise.all([
         FileSystem.getFreeDiskStorageAsync(),
         FileSystem.getTotalDiskCapacityAsync(),
+        getOwnCacheSize(),
       ]);
       const usedSpace = totalSpace - freeSpace;
-      // Estimate junk as ~8-12% of used space (realistic range)
-      const junkEstimate = Math.floor(usedSpace * (0.08 + Math.random() * 0.04));
-      setStorageStats({ totalSpace, usedSpace, freeSpace, junkEstimate });
+      setStorageStats({ totalSpace, usedSpace, freeSpace, appCacheSize });
     } catch {
-      // Fallback to demo data if device API unavailable
+      // Fallback demo data if device API unavailable (web preview)
       const total = 64 * 1024 * 1024 * 1024;
       const used = 42 * 1024 * 1024 * 1024;
-      setStorageStats({
-        totalSpace: total,
-        usedSpace: used,
-        freeSpace: total - used,
-        junkEstimate: 3.2 * 1024 * 1024 * 1024,
-      });
+      setStorageStats({ totalSpace: total, usedSpace: used, freeSpace: total - used, appCacheSize: 0 });
     } finally {
       setIsLoadingStats(false);
+    }
+  }, []);
+
+  /** Scan MediaLibrary for real storage breakdown by category */
+  const scanMediaLibrary = useCallback(async (
+    onProgress?: (pct: number) => void,
+    onLog?: (msg: string) => void
+  ): Promise<MediaBreakdown | null> => {
+    if (Platform.OS === 'web') return null;
+
+    onLog?.('requesting media library access...');
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') {
+      onLog?.('[!] media access denied — grant permission in settings');
+      return null;
+    }
+
+    onProgress?.(5);
+    onLog?.('loading media library...');
+
+    try {
+      // Load all assets in batches
+      let allAssets: MediaLibrary.Asset[] = [];
+      let after: string | undefined;
+      let batchNum = 0;
+
+      do {
+        const page = await MediaLibrary.getAssetsAsync({
+          first: 500,
+          after,
+          sortBy: [MediaLibrary.SortBy.creationTime],
+          mediaType: [
+            MediaLibrary.MediaType.photo,
+            MediaLibrary.MediaType.video,
+            MediaLibrary.MediaType.audio,
+          ],
+        });
+        allAssets = [...allAssets, ...page.assets];
+        after = page.hasNextPage ? page.endCursor : undefined;
+        batchNum++;
+        onProgress?.(Math.min(40, 5 + batchNum * 10));
+        onLog?.(`loaded ${allAssets.length} media items...`);
+      } while (after && allAssets.length < 3000);
+
+      onProgress?.(50);
+      onLog?.('finding screenshots album...');
+
+      // Find Screenshots + Downloads albums
+      const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
+      const screenshotAlbum = albums.find(a =>
+        a.title.toLowerCase().includes('screenshot')
+      );
+      const downloadAlbum = albums.find(a =>
+        a.title.toLowerCase() === 'download' || a.title.toLowerCase() === 'downloads'
+      );
+
+      let screenshotIds = new Set<string>();
+      let downloadIds = new Set<string>();
+
+      if (screenshotAlbum) {
+        onLog?.(`scanning Screenshots album (${screenshotAlbum.assetCount} items)...`);
+        const ssAssets = await MediaLibrary.getAssetsAsync({
+          first: 2000,
+          album: screenshotAlbum,
+          mediaType: [MediaLibrary.MediaType.photo],
+        });
+        ssAssets.assets.forEach(a => screenshotIds.add(a.id));
+      }
+
+      onProgress?.(70);
+
+      if (downloadAlbum) {
+        onLog?.(`scanning Downloads album (${downloadAlbum.assetCount} items)...`);
+        const dlAssets = await MediaLibrary.getAssetsAsync({
+          first: 1000,
+          album: downloadAlbum,
+        });
+        dlAssets.assets.forEach(a => downloadIds.add(a.id));
+      }
+
+      onProgress?.(85);
+      onLog?.('calculating storage usage...');
+
+      // Categorize and size all assets
+      const breakdown: MediaBreakdown = {
+        images: { count: 0, size: 0 },
+        videos: { count: 0, size: 0 },
+        audio: { count: 0, size: 0 },
+        screenshots: { count: 0, size: 0 },
+        downloads: { count: 0, size: 0 },
+        appCache: { size: 0 },
+        totalScanned: allAssets.length,
+        sizesAreEstimated: true,
+        lastScanned: new Date().toISOString(),
+      };
+
+      for (const asset of allAssets) {
+        const isScreenshot = screenshotIds.has(asset.id);
+        const isDownload = downloadIds.has(asset.id);
+
+        if (asset.mediaType === MediaLibrary.MediaType.photo) {
+          const size = estimateImageSize(asset.width, asset.height);
+          if (isScreenshot) {
+            breakdown.screenshots.count++;
+            breakdown.screenshots.size += size;
+          } else {
+            breakdown.images.count++;
+            breakdown.images.size += size;
+          }
+          if (isDownload) {
+            breakdown.downloads.count++;
+            breakdown.downloads.size += size;
+          }
+        } else if (asset.mediaType === MediaLibrary.MediaType.video) {
+          const size = estimateVideoSize(asset.duration);
+          breakdown.videos.count++;
+          breakdown.videos.size += size;
+          if (isDownload) {
+            breakdown.downloads.count++;
+            breakdown.downloads.size += size;
+          }
+        } else if (asset.mediaType === MediaLibrary.MediaType.audio) {
+          const size = estimateAudioSize(asset.duration);
+          breakdown.audio.count++;
+          breakdown.audio.size += size;
+        }
+      }
+
+      // Real own app cache size
+      breakdown.appCache.size = await getOwnCacheSize();
+
+      onProgress?.(100);
+      onLog?.(`scan complete — ${allAssets.length} items analysed`);
+
+      setMediaBreakdown(breakdown);
+      return breakdown;
+    } catch (e) {
+      onLog?.(`[!] scan error: ${String(e)}`);
+      return null;
     }
   }, []);
 
@@ -120,7 +300,6 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       AsyncStorage.setItem(STORAGE_KEYS.TOTAL_FREED, String(updated));
       return updated;
     });
-    // Update storage stats after cleaning
     await refreshStats();
   }, [refreshStats]);
 
@@ -142,11 +321,13 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       value={{
         storageStats,
         isLoadingStats,
+        mediaBreakdown,
         history,
         totalBytesFreed,
         scheduleSettings,
         rootEnabled,
         refreshStats,
+        scanMediaLibrary,
         addHistoryItem,
         updateSchedule,
         setRootEnabled,
