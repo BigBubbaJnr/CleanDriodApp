@@ -1,7 +1,6 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Platform,
   Pressable,
   ScrollView,
@@ -9,21 +8,12 @@ import {
   Text,
   View,
 } from 'react-native';
-import Animated, {
-  FadeIn,
-  FadeInDown,
-  useAnimatedStyle,
-  useSharedValue,
-  withRepeat,
-  withSequence,
-  withTiming,
-} from 'react-native-reanimated';
+import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system/legacy';
-import { LinearGradient } from 'expo-linear-gradient';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -41,14 +31,14 @@ function formatBytes(bytes: number): string {
   return (bytes / 1024).toFixed(0) + ' KB';
 }
 
-const CATEGORY_LABELS: Record<string, string> = {
-  apk: 'Old APK File',
-  empty_folder: 'Empty Folder',
-  temp: 'Temp File',
-  download: 'Leftover Download',
+const CAT_LABELS: Record<string, string> = {
+  apk: 'OLD APK',
+  empty_folder: 'EMPTY DIR',
+  temp: 'TEMP FILE',
+  download: 'LEFTOVER DL',
 };
 
-const CATEGORY_ICONS: Record<string, keyof typeof Feather.glyphMap> = {
+const CAT_ICONS: Record<string, keyof typeof Feather.glyphMap> = {
   apk: 'package',
   empty_folder: 'folder',
   temp: 'file',
@@ -56,7 +46,7 @@ const CATEGORY_ICONS: Record<string, keyof typeof Feather.glyphMap> = {
 };
 
 function generateMockJunk(): JunkItem[] {
-  const items: JunkItem[] = [
+  return [
     { id: '1', name: 'WhatsApp_2024.apk', size: 48 * 1024 * 1024, category: 'apk', selected: true },
     { id: '2', name: 'update_backup.apk', size: 32 * 1024 * 1024, category: 'apk', selected: true },
     { id: '3', name: 'com.android.gallery/.cache', size: 0, category: 'empty_folder', selected: true },
@@ -68,7 +58,43 @@ function generateMockJunk(): JunkItem[] {
     { id: '9', name: '.empty_screenshots', size: 0, category: 'empty_folder', selected: true },
     { id: '10', name: 'instagram_cache_old.apk', size: 56 * 1024 * 1024, category: 'apk', selected: true },
   ];
-  return items;
+}
+
+/** Retro segmented progress bar */
+function SegBar({ value, color, total = 24 }: { value: number; color: string; total?: number }) {
+  const colors = useColors();
+  const filled = Math.max(0, Math.min(total, Math.round(value * total)));
+  return (
+    <View style={{ flexDirection: 'row', gap: 2 }}>
+      {Array.from({ length: total }, (_, i) => (
+        <View key={i} style={{ flex: 1, height: 8, backgroundColor: i < filled ? color : colors.border }} />
+      ))}
+    </View>
+  );
+}
+
+/** Retro scan ticker — cycles through fake filenames while scanning */
+function ScanTicker({ active }: { active: boolean }) {
+  const colors = useColors();
+  const lines = [
+    'checking /data/local/tmp...',
+    'reading /sdcard/Downloads...',
+    'scanning residual APKs...',
+    'checking /cache/dalvik...',
+    'reading temp directories...',
+    'scanning .nomedia folders...',
+  ];
+  const [idx, setIdx] = useState(0);
+  useEffect(() => {
+    if (!active) return;
+    const id = setInterval(() => setIdx(i => (i + 1) % lines.length), 500);
+    return () => clearInterval(id);
+  }, [active]);
+  return (
+    <Text style={[styles.tickerLine, { color: colors.mutedForeground }]} numberOfLines={1}>
+      {'> '}{lines[idx]}
+    </Text>
+  );
 }
 
 export default function JunkCleanerScreen() {
@@ -81,7 +107,6 @@ export default function JunkCleanerScreen() {
   const [scanProgress, setScanProgress] = useState(0);
   const [bytesFreed, setBytesFreed] = useState(0);
 
-  const scanAnim = useSharedValue(0);
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
@@ -90,31 +115,22 @@ export default function JunkCleanerScreen() {
     setScanProgress(0);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    // Real: try clearing app cache, supplement with realistic mock results
-    let cacheSize = 0;
     try {
-      const cacheInfo = await FileSystem.getInfoAsync(FileSystem.cacheDirectory!);
-      if (cacheInfo.exists) {
-        // We can clear our own cache
-        cacheSize = (cacheInfo as any).size || 0;
-      }
+      await FileSystem.getInfoAsync(FileSystem.cacheDirectory!);
     } catch {}
 
-    // Simulate progressive scan
-    for (let i = 0; i <= 100; i += 10) {
-      await new Promise(r => setTimeout(r, 120));
-      setScanProgress(i);
+    for (let i = 0; i <= 100; i += 8) {
+      await new Promise(r => setTimeout(r, 110));
+      setScanProgress(Math.min(i, 100));
     }
 
-    const mockItems = generateMockJunk();
-    setItems(mockItems);
+    setItems(generateMockJunk());
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, []);
 
-  const toggleItem = (id: string) => {
+  const toggleItem = (id: string) =>
     setItems(prev => prev.map(i => i.id === id ? { ...i, selected: !i.selected } : i));
-  };
 
   const selectAll = () => {
     const allSelected = items.every(i => i.selected);
@@ -129,14 +145,8 @@ export default function JunkCleanerScreen() {
     if (selectedItems.length === 0) return;
     setPhase('cleaning');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-
-    // Actually clear app cache
-    try {
-      await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true });
-    } catch {}
-
+    try { await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true }); } catch {}
     await new Promise(r => setTimeout(r, 1500));
-
     setBytesFreed(selectedSize);
     await addHistoryItem({
       date: new Date().toISOString(),
@@ -144,138 +154,140 @@ export default function JunkCleanerScreen() {
       type: 'junk',
       label: `Junk Cleaner — ${selectedItems.length} items`,
     });
-
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
+  // Bevel helpers
+  const bevelRaised = {
+    borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
+    borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+  };
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
-      <View
-        style={[
-          styles.header,
-          {
-            paddingTop: insets.top + 12 + webTopPad,
-            backgroundColor: colors.background,
-            borderBottomColor: colors.border,
-          },
-        ]}
-      >
-        <Pressable onPress={() => router.back()} style={styles.backBtn}>
-          <Feather name="arrow-left" size={22} color={colors.foreground} />
+      {/* ── Header ── */}
+      <View style={[styles.header, {
+        paddingTop: insets.top + 12 + webTopPad,
+        backgroundColor: colors.background,
+        borderBottomColor: colors.primary + '40',
+      }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevelRaised, { backgroundColor: colors.card }]}>
+          <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
-        <Text style={[styles.headerTitle, { color: colors.foreground }]}>Junk Cleaner</Text>
-        {phase === 'results' && (
-          <Pressable onPress={selectAll}>
-            <Text style={[styles.selectAll, { color: colors.primary }]}>
-              {items.every(i => i.selected) ? 'None' : 'All'}
-            </Text>
-          </Pressable>
-        )}
-        {phase !== 'results' && <View style={{ width: 40 }} />}
+        <View>
+          <Text style={[styles.headerSub, { color: colors.mutedForeground }]}>{'> MODULE'}</Text>
+          <Text style={[styles.headerTitle, { color: colors.foreground }]}>JUNK CLEANER</Text>
+        </View>
+        {phase === 'results'
+          ? <Pressable onPress={selectAll} style={[styles.selectAllBtn, { borderColor: colors.border }]}>
+              <Text style={[styles.selectAllText, { color: colors.primary }]}>
+                {items.every(i => i.selected) ? 'NONE' : 'ALL'}
+              </Text>
+            </Pressable>
+          : <View style={{ width: 48 }} />
+        }
       </View>
 
       <ScrollView
-        contentContainerStyle={[
-          styles.content,
-          { paddingBottom: insets.bottom + 100 + webBottomPad },
-        ]}
+        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 + webBottomPad }]}
         showsVerticalScrollIndicator={false}
       >
+        {/* ── IDLE ── */}
         {phase === 'idle' && (
-          <Animated.View entering={FadeIn} style={styles.idleCenter}>
-            <LinearGradient
-              colors={[colors.primary, '#9B8FFF']}
-              style={styles.bigIcon}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-            >
-              <Feather name="trash-2" size={48} color="#FFF" />
-            </LinearGradient>
-            <Text style={[styles.idleTitle, { color: colors.foreground }]}>Find Junk Files</Text>
-            <Text style={[styles.idleSub, { color: colors.mutedForeground }]}>
-              Scans for old APKs, empty folders, temp files, and leftover downloads
-            </Text>
-            <Pressable onPress={startScan}>
-              <LinearGradient
-                colors={[colors.primary, '#9B8FFF']}
-                style={styles.startBtn}
-                start={{ x: 0, y: 0 }}
-                end={{ x: 1, y: 0 }}
-              >
-                <Text style={styles.startBtnText}>Start Scan</Text>
-              </LinearGradient>
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <View style={[styles.idleIconBox, bevelRaised, { backgroundColor: colors.card }]}>
+              <Feather name="trash-2" size={44} color={colors.primary} />
+            </View>
+            <Text style={[styles.idleTitle, { color: colors.foreground }]}>JUNK CLEANER</Text>
+            <View style={[styles.idleInfoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
+              {['Old APK installers', 'Empty folders', 'Temp files', 'Partial downloads'].map(line => (
+                <Text key={line} style={[styles.idleInfoLine, { color: colors.mutedForeground }]}>
+                  {'[+] '}{line}
+                </Text>
+              ))}
+            </View>
+            <Pressable onPress={startScan} style={styles.fullWidth}>
+              <View style={[styles.primaryBtn, {
+                backgroundColor: colors.primary,
+                borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
+                borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
+                borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+              }]}>
+                <Feather name="search" size={16} color={colors.primaryForeground} />
+                <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>
+                  {'>> START SCAN'}
+                </Text>
+              </View>
             </Pressable>
           </Animated.View>
         )}
 
+        {/* ── SCANNING ── */}
         {phase === 'scanning' && (
-          <Animated.View entering={FadeIn} style={styles.scanningCenter}>
-            <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={[styles.scanningTitle, { color: colors.foreground }]}>Scanning...</Text>
-            <Text style={[styles.scanningPct, { color: colors.primary }]}>{scanProgress}%</Text>
-            <View style={[styles.progressTrack, { backgroundColor: colors.border }]}>
-              <View
-                style={[
-                  styles.progressFill,
-                  { backgroundColor: colors.primary, width: `${scanProgress}%` as any },
-                ]}
-              />
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <View style={[styles.scanningBox, bevelRaised, { backgroundColor: colors.card }]}>
+              <Text style={[styles.scanningTitle, { color: colors.primary }]}>
+                {'[SCANNING...]'}
+              </Text>
+              <Text style={[styles.scanningPct, { color: colors.primary }]}>
+                {String(scanProgress).padStart(3, '0')}%
+              </Text>
+              <SegBar value={scanProgress / 100} color={colors.primary} />
+              <ScanTicker active />
             </View>
-            <Text style={[styles.scanningHint, { color: colors.mutedForeground }]}>
-              Checking downloads, temp files, APKs...
-            </Text>
           </Animated.View>
         )}
 
+        {/* ── RESULTS / CLEANING ── */}
         {(phase === 'results' || phase === 'cleaning') && items.length > 0 && (
           <Animated.View entering={FadeIn}>
-            {/* Summary */}
-            <View style={[styles.summaryCard, { backgroundColor: colors.primary + '15', borderColor: colors.primary + '30' }]}>
-              <Text style={[styles.summaryTotal, { color: colors.primary }]}>
-                {formatBytes(totalSize)}
-              </Text>
-              <Text style={[styles.summarySub, { color: colors.mutedForeground }]}>
-                {items.length} items found
-              </Text>
+            {/* Summary readout */}
+            <View style={[styles.summaryPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <Text style={[styles.summaryHead, { color: colors.primary }]}>{'[SCAN COMPLETE]'}</Text>
+              <View style={styles.summaryRow}>
+                <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>TOTAL_JUNK</Text>
+                <Text style={[styles.summarySep, { color: colors.border }]}>{' = '}</Text>
+                <Text style={[styles.summaryVal, { color: colors.accent }]}>{formatBytes(totalSize)}</Text>
+              </View>
+              <View style={styles.summaryRow}>
+                <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>FILES_FOUND</Text>
+                <Text style={[styles.summarySep, { color: colors.border }]}>{' = '}</Text>
+                <Text style={[styles.summaryVal, { color: colors.foreground }]}>{items.length}</Text>
+              </View>
             </View>
 
-            {/* Item list */}
-            <View style={[styles.itemsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            {/* File list */}
+            <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
               {items.map((item, idx) => (
                 <Pressable
                   key={item.id}
                   style={[
                     styles.itemRow,
                     idx < items.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                    item.selected && { backgroundColor: colors.primary + '08' },
                   ]}
                   onPress={() => toggleItem(item.id)}
                 >
-                  <View
-                    style={[
-                      styles.itemCheck,
-                      {
-                        backgroundColor: item.selected ? colors.primary : 'transparent',
-                        borderColor: item.selected ? colors.primary : colors.border,
-                      },
-                    ]}
-                  >
-                    {item.selected && <Feather name="check" size={12} color="#FFF" />}
+                  {/* Square checkbox */}
+                  <View style={[styles.checkbox, {
+                    backgroundColor: item.selected ? colors.primary : 'transparent',
+                    borderColor: item.selected ? colors.primary : colors.border,
+                  }]}>
+                    {item.selected && <Text style={styles.checkMark}>✓</Text>}
                   </View>
-                  <View style={[styles.itemIcon, { backgroundColor: colors.muted }]}>
-                    <Feather name={CATEGORY_ICONS[item.category]} size={16} color={colors.mutedForeground} />
+                  {/* Icon */}
+                  <View style={[styles.itemIconBox, { borderColor: colors.border }]}>
+                    <Feather name={CAT_ICONS[item.category]} size={14} color={colors.mutedForeground} />
                   </View>
+                  {/* Info */}
                   <View style={styles.itemContent}>
-                    <Text style={[styles.itemName, { color: colors.foreground }]} numberOfLines={1}>
-                      {item.name}
-                    </Text>
-                    <Text style={[styles.itemCategory, { color: colors.mutedForeground }]}>
-                      {CATEGORY_LABELS[item.category]}
-                    </Text>
+                    <Text style={[styles.itemName, { color: colors.foreground }]} numberOfLines={1}>{item.name}</Text>
+                    <Text style={[styles.itemCat, { color: colors.mutedForeground }]}>{CAT_LABELS[item.category]}</Text>
                   </View>
-                  <Text style={[styles.itemSize, { color: colors.mutedForeground }]}>
-                    {item.size > 0 ? formatBytes(item.size) : 'Empty'}
+                  <Text style={[styles.itemSize, { color: item.selected ? colors.primary : colors.mutedForeground }]}>
+                    {item.size > 0 ? formatBytes(item.size) : '0 B'}
                   </Text>
                 </Pressable>
               ))}
@@ -283,60 +295,60 @@ export default function JunkCleanerScreen() {
           </Animated.View>
         )}
 
+        {/* ── DONE ── */}
         {phase === 'done' && (
-          <Animated.View entering={FadeIn} style={styles.doneCenter}>
-            <LinearGradient
-              colors={[colors.accent, '#00A896']}
-              style={styles.bigIcon}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 1 }}
-            >
-              <Feather name="check-circle" size={48} color="#FFF" />
-            </LinearGradient>
-            <Text style={[styles.doneTitle, { color: colors.foreground }]}>All Clean!</Text>
-            <Text style={[styles.doneFreed, { color: colors.accent }]}>{formatBytes(bytesFreed)}</Text>
-            <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>freed from your device</Text>
-            <Pressable
-              style={[styles.doneBtn, { backgroundColor: colors.card, borderColor: colors.border }]}
-              onPress={() => { setPhase('idle'); setItems([]); }}
-            >
-              <Text style={[styles.doneBtnText, { color: colors.foreground }]}>Scan Again</Text>
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <View style={[styles.doneBox, bevelRaised, { backgroundColor: colors.card }]}>
+              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] CLEAN COMPLETE'}</Text>
+              <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(bytesFreed)}</Text>
+              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED FROM DEVICE</Text>
+            </View>
+            <Pressable onPress={() => { setPhase('idle'); setItems([]); }} style={styles.fullWidth}>
+              <View style={[styles.outlineBtn, {
+                borderColor: colors.border, backgroundColor: colors.card,
+                borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
+                borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
+                borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+              }]}>
+                <Text style={[styles.outlineBtnText, { color: colors.foreground }]}>{'>> SCAN AGAIN'}</Text>
+              </View>
             </Pressable>
           </Animated.View>
         )}
       </ScrollView>
 
-      {/* Clean button */}
+      {/* ── Footer ── */}
       {(phase === 'results' || phase === 'cleaning') && (
-        <View
-          style={[
-            styles.footer,
-            {
-              paddingBottom: insets.bottom + 16 + webBottomPad,
-              backgroundColor: colors.background,
-              borderTopColor: colors.border,
-            },
-          ]}
-        >
+        <View style={[styles.footer, {
+          paddingBottom: insets.bottom + 16 + webBottomPad,
+          backgroundColor: colors.background,
+          borderTopColor: colors.primary + '40',
+        }]}>
           <Text style={[styles.footerSub, { color: colors.mutedForeground }]}>
-            {selectedItems.length} items selected · {formatBytes(selectedSize)}
+            {selectedItems.length} SELECTED  ·  {formatBytes(selectedSize)}
           </Text>
           <Pressable
             onPress={handleClean}
             disabled={selectedItems.length === 0 || phase === 'cleaning'}
+            style={styles.fullWidth}
           >
-            <LinearGradient
-              colors={selectedItems.length > 0 ? [colors.primary, '#9B8FFF'] : [colors.border, colors.border]}
-              style={styles.cleanBtn}
-              start={{ x: 0, y: 0 }}
-              end={{ x: 1, y: 0 }}
-            >
-              {phase === 'cleaning' ? (
-                <ActivityIndicator color="#FFF" />
-              ) : (
-                <Text style={styles.cleanBtnText}>Clean Selected</Text>
-              )}
-            </LinearGradient>
+            <View style={[styles.primaryBtn, {
+              backgroundColor: selectedItems.length > 0 ? colors.primary : colors.muted,
+              borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
+              borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
+              borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+              opacity: selectedItems.length === 0 ? 0.5 : 1,
+            }]}>
+              {phase === 'cleaning'
+                ? <ActivityIndicator color={colors.primaryForeground} size="small" />
+                : <>
+                    <Feather name="trash-2" size={16} color={colors.primaryForeground} />
+                    <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>
+                      {'>> CLEAN SELECTED'}
+                    </Text>
+                  </>
+              }
+            </View>
           </Pressable>
         </View>
       )}
@@ -348,43 +360,58 @@ const styles = StyleSheet.create({
   container: { flex: 1 },
   header: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
-    paddingHorizontal: 20, paddingBottom: 12, borderBottomWidth: 1,
+    paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1,
   },
-  backBtn: { width: 40, height: 40, alignItems: 'center', justifyContent: 'center' },
-  headerTitle: { fontSize: 17, fontFamily: 'Inter_600SemiBold' },
-  selectAll: { fontSize: 14, fontFamily: 'Inter_500Medium', width: 40, textAlign: 'right' },
-  content: { padding: 20 },
-  idleCenter: { alignItems: 'center', paddingTop: 60, gap: 16 },
-  bigIcon: { width: 100, height: 100, borderRadius: 30, alignItems: 'center', justifyContent: 'center' },
-  idleTitle: { fontSize: 22, fontFamily: 'Inter_700Bold', marginTop: 8 },
-  idleSub: { fontSize: 14, fontFamily: 'Inter_400Regular', textAlign: 'center', lineHeight: 22, paddingHorizontal: 20 },
-  startBtn: { paddingHorizontal: 48, paddingVertical: 16, borderRadius: 18, marginTop: 8 },
-  startBtnText: { color: '#FFF', fontSize: 16, fontFamily: 'Inter_700Bold' },
-  scanningCenter: { alignItems: 'center', paddingTop: 80, gap: 16 },
-  scanningTitle: { fontSize: 18, fontFamily: 'Inter_600SemiBold' },
-  scanningPct: { fontSize: 36, fontFamily: 'Inter_700Bold' },
-  progressTrack: { width: '80%', height: 6, borderRadius: 3, overflow: 'hidden' },
-  progressFill: { height: 6, borderRadius: 3 },
-  scanningHint: { fontSize: 13, fontFamily: 'Inter_400Regular' },
-  summaryCard: { borderRadius: 16, borderWidth: 1, padding: 20, alignItems: 'center', marginBottom: 16 },
-  summaryTotal: { fontSize: 36, fontFamily: 'Inter_700Bold' },
-  summarySub: { fontSize: 13, fontFamily: 'Inter_400Regular', marginTop: 4 },
-  itemsCard: { borderRadius: 16, borderWidth: 1, overflow: 'hidden', marginBottom: 20 },
-  itemRow: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
-  itemCheck: { width: 22, height: 22, borderRadius: 6, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
-  itemIcon: { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  headerSub: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 2 },
+  headerTitle: { fontSize: 14, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  selectAllBtn: { paddingHorizontal: 10, paddingVertical: 6, borderWidth: 1 },
+  selectAllText: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 1.5 },
+  content: { padding: 16, gap: 12 },
+  center: { alignItems: 'center', paddingTop: 40, gap: 16 },
+  fullWidth: { width: '100%' },
+
+  idleIconBox: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
+  idleTitle: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
+  idleInfoBox: { width: '100%', borderWidth: 1, padding: 14, gap: 6 },
+  idleInfoLine: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+
+  primaryBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 14, gap: 10,
+  },
+  primaryBtnText: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+
+  scanningBox: { width: '100%', padding: 20, gap: 14 },
+  scanningTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  scanningPct: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
+  tickerLine: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+
+  summaryPanel: { padding: 14, gap: 6, marginBottom: 10 },
+  summaryHead: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 6 },
+  summaryRow: { flexDirection: 'row' },
+  summaryKey: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, width: 120 },
+  summarySep: { fontSize: 11, fontFamily: 'Inter_400Regular' },
+  summaryVal: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+
+  listPanel: { overflow: 'hidden' },
+  itemRow: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
+  checkbox: { width: 18, height: 18, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
+  checkMark: { color: '#FFF', fontSize: 10, fontFamily: 'Inter_700Bold', lineHeight: 14 },
+  itemIconBox: { width: 32, height: 32, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
   itemContent: { flex: 1 },
-  itemName: { fontSize: 13, fontFamily: 'Inter_500Medium' },
-  itemCategory: { fontSize: 11, fontFamily: 'Inter_400Regular', marginTop: 2 },
-  itemSize: { fontSize: 12, fontFamily: 'Inter_500Medium' },
+  itemName: { fontSize: 12, fontFamily: 'Inter_500Medium' },
+  itemCat: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 1, marginTop: 2 },
+  itemSize: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+
+  doneBox: { width: '100%', padding: 24, gap: 10, alignItems: 'center' },
+  doneHead: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  doneBytes: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  doneSub: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 2 },
+
+  outlineBtn: { alignItems: 'center', justifyContent: 'center', paddingVertical: 14 },
+  outlineBtnText: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+
   footer: { padding: 16, borderTopWidth: 1, gap: 10 },
-  footerSub: { fontSize: 12, fontFamily: 'Inter_400Regular', textAlign: 'center' },
-  cleanBtn: { paddingVertical: 16, borderRadius: 16, alignItems: 'center' },
-  cleanBtnText: { color: '#FFF', fontSize: 16, fontFamily: 'Inter_700Bold' },
-  doneCenter: { alignItems: 'center', paddingTop: 60, gap: 12 },
-  doneTitle: { fontSize: 26, fontFamily: 'Inter_700Bold', marginTop: 8 },
-  doneFreed: { fontSize: 48, fontFamily: 'Inter_700Bold' },
-  doneSub: { fontSize: 15, fontFamily: 'Inter_400Regular' },
-  doneBtn: { marginTop: 16, paddingHorizontal: 32, paddingVertical: 14, borderRadius: 14, borderWidth: 1 },
-  doneBtnText: { fontSize: 15, fontFamily: 'Inter_600SemiBold' },
+  footerSub: { fontSize: 10, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5, textAlign: 'center' },
 });
