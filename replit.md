@@ -1,6 +1,6 @@
-# [Project name]
+# CleanDroid
 
-_Replace the heading above with the project's name, and this line with one sentence describing what this app does for users._
+A free Android phone cleaner app — junk cleaner, duplicate finder, large file scanner, app cache guide, and auto-clean scheduler. No paywalls, no subscriptions.
 
 ## Run & Operate
 
