@@ -1,72 +1,73 @@
 import React from 'react';
 import { Pressable, StyleSheet, Text, View } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 
 interface ToolCardProps {
   title: string;
   description: string;
   icon: keyof typeof Feather.glyphMap;
-  gradientColors: [string, string];
+  /** First color is used as icon accent in retro mode */
+  gradientColors: string[];
   badge?: string;
   onPress: () => void;
 }
 
-const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
-
-export default function ToolCard({
-  title,
-  description,
-  icon,
-  gradientColors,
-  badge,
-  onPress,
-}: ToolCardProps) {
+export default function ToolCard({ title, description, icon, gradientColors, badge, onPress }: ToolCardProps) {
   const colors = useColors();
-  const scale = useSharedValue(1);
+  const iconColor = gradientColors[0];
 
-  const animatedStyle = useAnimatedStyle(() => ({
-    transform: [{ scale: scale.value }],
+  const pressed = useSharedValue(0);
+  const animStyle = useAnimatedStyle(() => ({
+    // Invert bevel on press to look "pressed in"
+    opacity: 1 - pressed.value * 0.08,
+    transform: [{ translateY: pressed.value * 1 }],
   }));
 
-  const handlePressIn = () => {
-    scale.value = withSpring(0.97, { damping: 15, stiffness: 400 });
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-  };
-
-  const handlePressOut = () => {
-    scale.value = withSpring(1, { damping: 15, stiffness: 400 });
-  };
+  const handlePressIn = () => { pressed.value = withTiming(1, { duration: 60 }); };
+  const handlePressOut = () => { pressed.value = withTiming(0, { duration: 100 }); };
 
   return (
-    <AnimatedPressable
-      style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, animatedStyle]}
-      onPress={onPress}
+    <Pressable
+      onPress={() => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); onPress(); }}
       onPressIn={handlePressIn}
       onPressOut={handlePressOut}
     >
-      <LinearGradient
-        colors={gradientColors}
-        style={styles.iconContainer}
-        start={{ x: 0, y: 0 }}
-        end={{ x: 1, y: 1 }}
-      >
-        <Feather name={icon} size={22} color="#FFFFFF" />
-      </LinearGradient>
-      <View style={styles.content}>
-        <Text style={[styles.title, { color: colors.foreground }]}>{title}</Text>
-        <Text style={[styles.description, { color: colors.mutedForeground }]}>{description}</Text>
-      </View>
-      {badge && (
-        <View style={[styles.badge, { backgroundColor: colors.primary + '22', borderColor: colors.primary + '44' }]}>
-          <Text style={[styles.badgeText, { color: colors.primary }]}>{badge}</Text>
+      <Animated.View style={[
+        styles.card,
+        animStyle,
+        {
+          backgroundColor: colors.card,
+          borderTopColor: colors.bevelLight,
+          borderLeftColor: colors.bevelLight,
+          borderBottomColor: colors.bevelDark,
+          borderRightColor: colors.bevelDark,
+        },
+      ]}>
+        {/* Icon box */}
+        <View style={[styles.iconBox, { borderColor: iconColor + '50', backgroundColor: iconColor + '12' }]}>
+          <Feather name={icon} size={20} color={iconColor} />
         </View>
-      )}
-      <Feather name="chevron-right" size={18} color={colors.mutedForeground} />
-    </AnimatedPressable>
+
+        {/* Text */}
+        <View style={styles.textBlock}>
+          <Text style={[styles.title, { color: colors.foreground }]}>{title.toUpperCase()}</Text>
+          <Text style={[styles.desc, { color: colors.mutedForeground }]} numberOfLines={2}>{description}</Text>
+        </View>
+
+        {/* Right side */}
+        <View style={styles.right}>
+          {badge ? (
+            <View style={[styles.badge, { borderColor: colors.accent + '60', backgroundColor: colors.accent + '15' }]}>
+              <Text style={[styles.badgeText, { color: colors.accent }]}>{badge}</Text>
+            </View>
+          ) : null}
+          <Text style={[styles.arrow, { color: colors.mutedForeground }]}>{'→'}</Text>
+        </View>
+      </Animated.View>
+    </Pressable>
   );
 }
 
@@ -74,40 +75,39 @@ const styles = StyleSheet.create({
   card: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    borderRadius: 16,
-    borderWidth: 1,
-    gap: 14,
-    marginBottom: 10,
+    padding: 14,
+    gap: 12,
+    marginBottom: 6,
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+    borderBottomWidth: 2,
+    borderRightWidth: 2,
   },
-  iconContainer: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+  iconBox: {
+    width: 42,
+    height: 42,
     alignItems: 'center',
     justifyContent: 'center',
+    borderWidth: 1,
   },
-  content: {
-    flex: 1,
-    gap: 3,
-  },
+  textBlock: { flex: 1 },
   title: {
-    fontSize: 15,
-    fontFamily: 'Inter_600SemiBold',
-  },
-  description: {
     fontSize: 12,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 1.5,
+    marginBottom: 4,
+  },
+  desc: {
+    fontSize: 11,
     fontFamily: 'Inter_400Regular',
     lineHeight: 16,
   },
+  right: { alignItems: 'flex-end', gap: 6 },
   badge: {
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 8,
     borderWidth: 1,
+    paddingHorizontal: 7,
+    paddingVertical: 3,
   },
-  badgeText: {
-    fontSize: 11,
-    fontFamily: 'Inter_600SemiBold',
-  },
+  badgeText: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+  arrow: { fontSize: 16, fontFamily: 'Inter_700Bold' },
 });

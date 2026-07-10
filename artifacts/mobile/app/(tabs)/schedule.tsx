@@ -1,19 +1,17 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
-import Animated, { useAnimatedStyle, withTiming } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
-import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 type Frequency = 'daily' | 'weekly' | 'monthly';
 
 const FREQUENCIES: { value: Frequency; label: string; desc: string }[] = [
-  { value: 'daily', label: 'Daily', desc: 'Every day at 2 AM' },
-  { value: 'weekly', label: 'Weekly', desc: 'Every Sunday at 2 AM' },
-  { value: 'monthly', label: 'Monthly', desc: 'First of the month' },
+  { value: 'daily', label: 'DAILY', desc: 'Every day at 02:00' },
+  { value: 'weekly', label: 'WEEKLY', desc: 'Every Sunday at 02:00' },
+  { value: 'monthly', label: 'MONTHLY', desc: 'First of month at 02:00' },
 ];
 
 function formatBytes(bytes: number): string {
@@ -24,24 +22,16 @@ function formatBytes(bytes: number): string {
 
 function formatDate(dateStr: string): string {
   const d = new Date(dateStr);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).toUpperCase();
 }
 
 function getNextRun(frequency: Frequency): string {
   const now = new Date();
   const next = new Date(now);
-  if (frequency === 'daily') {
-    next.setDate(next.getDate() + 1);
-    next.setHours(2, 0, 0, 0);
-  } else if (frequency === 'weekly') {
-    const daysUntilSunday = (7 - now.getDay()) % 7 || 7;
-    next.setDate(next.getDate() + daysUntilSunday);
-    next.setHours(2, 0, 0, 0);
-  } else {
-    next.setMonth(next.getMonth() + 1, 1);
-    next.setHours(2, 0, 0, 0);
-  }
-  return next.toLocaleDateString('en-US', { weekday: 'long', month: 'short', day: 'numeric' });
+  if (frequency === 'daily') { next.setDate(next.getDate() + 1); next.setHours(2, 0, 0, 0); }
+  else if (frequency === 'weekly') { next.setDate(next.getDate() + ((7 - now.getDay()) % 7 || 7)); next.setHours(2, 0, 0, 0); }
+  else { next.setMonth(next.getMonth() + 1, 1); next.setHours(2, 0, 0, 0); }
+  return next.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase();
 }
 
 function typeIcon(type: string): keyof typeof Feather.glyphMap {
@@ -61,131 +51,139 @@ export default function ScheduleScreen() {
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
-  const handleToggle = (value: boolean) => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
-    updateSchedule({ enabled: value });
-  };
-
-  const handleFrequency = (freq: Frequency) => {
-    Haptics.selectionAsync();
-    updateSchedule({ frequency: freq });
-  };
-
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={[
         styles.content,
-        {
-          paddingTop: insets.top + 16 + webTopPad,
-          paddingBottom: insets.bottom + 100 + webBottomPad,
-        },
+        { paddingTop: insets.top + 20 + webTopPad, paddingBottom: insets.bottom + 100 + webBottomPad },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      <Text style={[styles.heading, { color: colors.foreground }]}>Auto-Clean</Text>
-      <Text style={[styles.sub, { color: colors.mutedForeground }]}>
-        Set it and forget it — CleanDroid cleans in the background
-      </Text>
+      {/* Header */}
+      <Text style={[styles.sysLabel, { color: colors.mutedForeground }]}>{'> DAEMON CONFIG'}</Text>
+      <Text style={[styles.heading, { color: colors.foreground }]}>AUTO-CLEAN</Text>
+      <View style={[styles.divider, { backgroundColor: colors.border }]} />
+      <Text style={[styles.sub, { color: colors.mutedForeground }]}>SET IT AND FORGET IT</Text>
 
-      {/* Toggle card */}
-      <View style={[styles.toggleCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <LinearGradient
-          colors={scheduleSettings.enabled ? [colors.primary, '#4ECDC4'] : [colors.border, colors.border]}
-          style={styles.toggleIcon}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-        >
-          <Feather name="clock" size={22} color="#FFFFFF" />
-        </LinearGradient>
-        <View style={styles.toggleContent}>
-          <Text style={[styles.toggleTitle, { color: colors.foreground }]}>Auto-Clean</Text>
-          <Text style={[styles.toggleSub, { color: colors.mutedForeground }]}>
-            {scheduleSettings.enabled ? `Runs ${scheduleSettings.frequency}` : 'Off'}
-          </Text>
+      {/* Toggle */}
+      <View style={[styles.panel, {
+        backgroundColor: colors.card,
+        borderTopColor: colors.bevelLight,
+        borderLeftColor: colors.bevelLight,
+        borderBottomColor: colors.bevelDark,
+        borderRightColor: colors.bevelDark,
+      }]}>
+        <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
+          <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[DAEMON STATUS]'}</Text>
         </View>
-        <Switch
-          value={scheduleSettings.enabled}
-          onValueChange={handleToggle}
-          trackColor={{ false: colors.border, true: colors.primary + '80' }}
-          thumbColor={scheduleSettings.enabled ? colors.primary : colors.mutedForeground}
-        />
+        <View style={styles.toggleRow}>
+          <View style={[styles.statusDot, { backgroundColor: scheduleSettings.enabled ? colors.success : colors.mutedForeground }]} />
+          <View style={styles.toggleText}>
+            <Text style={[styles.toggleTitle, { color: colors.foreground }]}>
+              {scheduleSettings.enabled ? 'ACTIVE' : 'INACTIVE'}
+            </Text>
+            <Text style={[styles.toggleSub, { color: colors.mutedForeground }]}>
+              {scheduleSettings.enabled ? `RUNS ${scheduleSettings.frequency.toUpperCase()}` : 'DAEMON OFFLINE'}
+            </Text>
+          </View>
+          <Switch
+            value={scheduleSettings.enabled}
+            onValueChange={v => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); updateSchedule({ enabled: v }); }}
+            trackColor={{ false: colors.border, true: colors.primary + '60' }}
+            thumbColor={scheduleSettings.enabled ? colors.primary : colors.mutedForeground}
+          />
+        </View>
       </View>
 
-      {/* Frequency picker */}
+      {/* Frequency */}
       {scheduleSettings.enabled && (
         <>
-          <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>FREQUENCY</Text>
-          <View style={[styles.frequencyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            {FREQUENCIES.map((f, idx) => (
-              <Pressable
-                key={f.value}
-                style={[
-                  styles.freqItem,
-                  idx < FREQUENCIES.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
-                  scheduleSettings.frequency === f.value && { backgroundColor: colors.primary + '12' },
-                ]}
-                onPress={() => handleFrequency(f.value)}
-              >
-                <View style={styles.freqText}>
-                  <Text style={[styles.freqLabel, { color: colors.foreground }]}>{f.label}</Text>
-                  <Text style={[styles.freqDesc, { color: colors.mutedForeground }]}>{f.desc}</Text>
-                </View>
-                {scheduleSettings.frequency === f.value && (
-                  <View style={[styles.freqCheck, { backgroundColor: colors.primary }]}>
-                    <Feather name="check" size={12} color="#FFF" />
+          <Text style={[styles.sectionLabel, { color: colors.primary }]}>
+            {'── INTERVAL ─────────────────────────'}
+          </Text>
+          <View style={[styles.panel, {
+            backgroundColor: colors.card,
+            borderTopColor: colors.bevelLight,
+            borderLeftColor: colors.bevelLight,
+            borderBottomColor: colors.bevelDark,
+            borderRightColor: colors.bevelDark,
+          }]}>
+            {FREQUENCIES.map((f, idx) => {
+              const active = scheduleSettings.frequency === f.value;
+              return (
+                <Pressable
+                  key={f.value}
+                  style={[
+                    styles.freqRow,
+                    idx < FREQUENCIES.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                    active && { backgroundColor: colors.primary + '10' },
+                  ]}
+                  onPress={() => { Haptics.selectionAsync(); updateSchedule({ frequency: f.value }); }}
+                >
+                  <View style={[styles.radioOuter, { borderColor: active ? colors.primary : colors.mutedForeground }]}>
+                    {active && <View style={[styles.radioInner, { backgroundColor: colors.primary }]} />}
                   </View>
-                )}
-              </Pressable>
-            ))}
+                  <View style={styles.freqText}>
+                    <Text style={[styles.freqLabel, { color: active ? colors.primary : colors.foreground }]}>{f.label}</Text>
+                    <Text style={[styles.freqDesc, { color: colors.mutedForeground }]}>{f.desc}</Text>
+                  </View>
+                </Pressable>
+              );
+            })}
           </View>
 
-          <View style={[styles.nextRunCard, { backgroundColor: colors.accent + '15', borderColor: colors.accent + '30' }]}>
-            <Feather name="calendar" size={16} color={colors.accent} />
-            <Text style={[styles.nextRunText, { color: colors.accent }]}>
-              Next run: {getNextRun(scheduleSettings.frequency)}
+          <View style={[styles.nextRunBox, { borderColor: colors.primary + '40', backgroundColor: colors.primary + '08' }]}>
+            <Text style={[styles.nextRunLabel, { color: colors.mutedForeground }]}>NEXT EXECUTION</Text>
+            <Text style={[styles.nextRunValue, { color: colors.primary }]}>
+              {'> '}{getNextRun(scheduleSettings.frequency)}
             </Text>
           </View>
         </>
       )}
 
       {/* History */}
-      {history.length > 0 && (
+      {history.length > 0 ? (
         <>
-          <Text style={[styles.sectionLabel, { color: colors.mutedForeground, marginTop: 24 }]}>CLEAN HISTORY</Text>
-          <View style={[styles.historyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.sectionLabel, { color: colors.primary, marginTop: 20 }]}>
+            {'── EXECUTION LOG ────────────────────'}
+          </Text>
+          <View style={[styles.panel, {
+            backgroundColor: colors.card,
+            borderTopColor: colors.bevelLight,
+            borderLeftColor: colors.bevelLight,
+            borderBottomColor: colors.bevelDark,
+            borderRightColor: colors.bevelDark,
+          }]}>
             {history.map((item, idx) => (
               <View
                 key={item.id}
-                style={[
-                  styles.historyItem,
-                  idx < history.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
-                ]}
+                style={[styles.histRow, idx < history.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
               >
-                <View style={[styles.historyIcon, { backgroundColor: colors.primary + '20' }]}>
-                  <Feather name={typeIcon(item.type)} size={14} color={colors.primary} />
-                </View>
-                <View style={styles.historyContent}>
-                  <Text style={[styles.historyLabel, { color: colors.foreground }]}>{item.label}</Text>
-                  <Text style={[styles.historyDate, { color: colors.mutedForeground }]}>
-                    {formatDate(item.date)}
+                <Feather name={typeIcon(item.type)} size={13} color={colors.primary} />
+                <View style={styles.histContent}>
+                  <Text style={[styles.histLabel, { color: colors.foreground }]} numberOfLines={1}>
+                    {item.label.toUpperCase()}
                   </Text>
+                  <Text style={[styles.histDate, { color: colors.mutedForeground }]}>{formatDate(item.date)}</Text>
                 </View>
-                <Text style={[styles.historySize, { color: colors.accent }]}>
-                  +{formatBytes(item.bytesFreed)}
-                </Text>
+                <Text style={[styles.histSize, { color: colors.accent }]}>+{formatBytes(item.bytesFreed)}</Text>
               </View>
             ))}
           </View>
         </>
-      )}
-
-      {history.length === 0 && (
-        <View style={[styles.emptyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <Feather name="clock" size={32} color={colors.mutedForeground} />
-          <Text style={[styles.emptyTitle, { color: colors.foreground }]}>No history yet</Text>
+      ) : (
+        <View style={[styles.emptyBox, {
+          backgroundColor: colors.card,
+          borderTopColor: colors.bevelLight,
+          borderLeftColor: colors.bevelLight,
+          borderBottomColor: colors.bevelDark,
+          borderRightColor: colors.bevelDark,
+          marginTop: 20,
+        }]}>
+          <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ LOG EMPTY ]'}</Text>
           <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-            Your cleaning history will appear here after your first scan
+            Execution history appears after first scan
           </Text>
         </View>
       )}
@@ -195,42 +193,41 @@ export default function ScheduleScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { paddingHorizontal: 20 },
-  heading: { fontSize: 24, fontFamily: 'Inter_700Bold', marginBottom: 6 },
-  sub: { fontSize: 13, fontFamily: 'Inter_400Regular', marginBottom: 24, lineHeight: 18 },
-  sectionLabel: {
-    fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5, marginBottom: 10,
+  content: { paddingHorizontal: 16 },
+  sysLabel: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 2, marginBottom: 4 },
+  heading: { fontSize: 22, fontFamily: 'Inter_700Bold', letterSpacing: 3, marginBottom: 10 },
+  divider: { height: 1, marginBottom: 10 },
+  sub: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 2, marginBottom: 20 },
+  sectionLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 10 },
+  panel: {
+    marginBottom: 14,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
-  toggleCard: {
-    flexDirection: 'row', alignItems: 'center', padding: 16,
-    borderRadius: 16, borderWidth: 1, gap: 14, marginBottom: 24,
-  },
-  toggleIcon: { width: 48, height: 48, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  toggleContent: { flex: 1 },
-  toggleTitle: { fontSize: 15, fontFamily: 'Inter_600SemiBold' },
-  toggleSub: { fontSize: 12, fontFamily: 'Inter_400Regular', marginTop: 2 },
-  frequencyCard: { borderRadius: 16, borderWidth: 1, overflow: 'hidden', marginBottom: 14 },
-  freqItem: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 12 },
+  panelHeader: { padding: 10, borderBottomWidth: 1 },
+  panelTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  toggleRow: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
+  statusDot: { width: 10, height: 10 },
+  toggleText: { flex: 1 },
+  toggleTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 1.5 },
+  toggleSub: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginTop: 2 },
+  freqRow: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
+  radioOuter: { width: 16, height: 16, borderWidth: 2, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  radioInner: { width: 7, height: 7, borderRadius: 4 },
   freqText: { flex: 1 },
-  freqLabel: { fontSize: 14, fontFamily: 'Inter_500Medium' },
-  freqDesc: { fontSize: 12, fontFamily: 'Inter_400Regular', marginTop: 2 },
-  freqCheck: { width: 22, height: 22, borderRadius: 11, alignItems: 'center', justifyContent: 'center' },
-  nextRunCard: {
-    flexDirection: 'row', alignItems: 'center', gap: 10,
-    padding: 14, borderRadius: 12, borderWidth: 1, marginBottom: 8,
+  freqLabel: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 1.5 },
+  freqDesc: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5, marginTop: 2 },
+  nextRunBox: { borderWidth: 1, padding: 12, gap: 4, marginBottom: 4 },
+  nextRunLabel: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 2 },
+  nextRunValue: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  histRow: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
+  histContent: { flex: 1 },
+  histLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.5 },
+  histDate: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginTop: 2 },
+  histSize: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+  emptyBox: {
+    padding: 32, alignItems: 'center', gap: 10,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
-  nextRunText: { fontSize: 13, fontFamily: 'Inter_500Medium', flex: 1 },
-  historyCard: { borderRadius: 16, borderWidth: 1, overflow: 'hidden' },
-  historyItem: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
-  historyIcon: { width: 32, height: 32, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  historyContent: { flex: 1 },
-  historyLabel: { fontSize: 13, fontFamily: 'Inter_500Medium' },
-  historyDate: { fontSize: 11, fontFamily: 'Inter_400Regular', marginTop: 2 },
-  historySize: { fontSize: 13, fontFamily: 'Inter_600SemiBold' },
-  emptyCard: {
-    borderRadius: 20, borderWidth: 1, padding: 32,
-    alignItems: 'center', gap: 10, marginTop: 20,
-  },
-  emptyTitle: { fontSize: 16, fontFamily: 'Inter_600SemiBold', marginTop: 4 },
-  emptyText: { fontSize: 13, fontFamily: 'Inter_400Regular', textAlign: 'center', lineHeight: 20 },
+  emptyIcon: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
+  emptyText: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, textAlign: 'center' },
 });

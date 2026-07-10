@@ -1,141 +1,115 @@
-import React from 'react';
-import { StyleSheet, Text, View } from 'react-native';
-import Svg, { Circle, Defs, LinearGradient, Stop } from 'react-native-svg';
+/**
+ * RetroStorageDisplay — replaces smooth donut chart with a
+ * Windows-defragmenter-style pixel block map. Totally unique
+ * vs every other cleaner app on the store.
+ */
+import React, { useEffect, useRef } from 'react';
+import { Animated, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 
-interface StorageRingChartProps {
+interface Props {
   totalSpace: number;
   usedSpace: number;
   junkSize: number;
+  /** ignored — kept for API compat */
   size?: number;
 }
 
-function formatBytes(bytes: number): string {
+function fmt(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
   if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  if (bytes >= 1024) return (bytes / 1024).toFixed(1) + ' KB';
-  return bytes + ' B';
+  return (bytes / 1024).toFixed(0) + ' KB';
 }
 
-export default function StorageRingChart({
-  totalSpace,
-  usedSpace,
-  junkSize,
-  size = 200,
-}: StorageRingChartProps) {
+const COLS = 32;
+const ROWS = 6;
+const TOTAL_BLOCKS = COLS * ROWS;
+
+export default function StorageRingChart({ totalSpace, usedSpace, junkSize }: Props) {
   const colors = useColors();
-  const strokeWidth = 20;
-  const gap = 4;
-  const innerStrokeWidth = 12;
-  const radius = (size - strokeWidth) / 2;
-  const innerRadius = radius - strokeWidth / 2 - gap - innerStrokeWidth / 2;
-  const circumference = 2 * Math.PI * radius;
-  const innerCircumference = 2 * Math.PI * innerRadius;
-  const center = size / 2;
+  const animVal = useRef(new Animated.Value(0)).current;
 
-  const usedFraction = usedSpace / totalSpace;
-  const junkFraction = junkSize / totalSpace;
-  const freeFraction = 1 - usedFraction;
+  const freeSpace = Math.max(0, totalSpace - usedSpace);
+  const cleanUsed = Math.max(0, usedSpace - junkSize);
 
-  // Outer ring: used (purple) + free (border)
-  const usedDash = usedFraction * circumference;
-  // Inner ring: junk (teal)
-  const junkDash = junkFraction * innerCircumference;
+  const junkBlocks = Math.round((junkSize / totalSpace) * TOTAL_BLOCKS);
+  const usedBlocks = Math.round((cleanUsed / totalSpace) * TOTAL_BLOCKS);
+  const freeBlocks = TOTAL_BLOCKS - junkBlocks - usedBlocks;
 
-  const freeSpace = totalSpace - usedSpace;
+  useEffect(() => {
+    animVal.setValue(0);
+    Animated.timing(animVal, {
+      toValue: 1,
+      duration: 900,
+      useNativeDriver: false,
+    }).start();
+  }, [totalSpace, usedSpace, junkSize]);
+
+  const revealedCount = animVal.interpolate({
+    inputRange: [0, 1],
+    outputRange: [0, TOTAL_BLOCKS],
+  });
+
+  const blocks: ('used' | 'junk' | 'free')[] = [
+    ...Array(usedBlocks).fill('used'),
+    ...Array(junkBlocks).fill('junk'),
+    ...Array(Math.max(0, freeBlocks)).fill('free'),
+  ];
 
   return (
     <View style={styles.container}>
-      <Svg width={size} height={size}>
-        <Defs>
-          <LinearGradient id="usedGrad" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={colors.primary} />
-            <Stop offset="1" stopColor="#4ECDC4" />
-          </LinearGradient>
-          <LinearGradient id="junkGrad" x1="0" y1="0" x2="1" y2="1">
-            <Stop offset="0" stopColor={colors.accent} />
-            <Stop offset="1" stopColor="#00A896" />
-          </LinearGradient>
-        </Defs>
-        {/* Background ring (free space) */}
-        <Circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke={colors.border}
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-        />
-        {/* Used space arc */}
-        <Circle
-          cx={center}
-          cy={center}
-          r={radius}
-          fill="none"
-          stroke="url(#usedGrad)"
-          strokeWidth={strokeWidth}
-          strokeLinecap="round"
-          strokeDasharray={`${usedDash} ${circumference - usedDash}`}
-          strokeDashoffset={circumference * 0.25}
-          rotation={-90}
-          origin={`${center}, ${center}`}
-        />
-        {/* Junk inner ring background */}
-        <Circle
-          cx={center}
-          cy={center}
-          r={innerRadius}
-          fill="none"
-          stroke={colors.border}
-          strokeWidth={innerStrokeWidth}
-        />
-        {/* Junk arc */}
-        <Circle
-          cx={center}
-          cy={center}
-          r={innerRadius}
-          fill="none"
-          stroke="url(#junkGrad)"
-          strokeWidth={innerStrokeWidth}
-          strokeLinecap="round"
-          strokeDasharray={`${junkDash} ${innerCircumference - junkDash}`}
-          strokeDashoffset={innerCircumference * 0.25}
-          rotation={-90}
-          origin={`${center}, ${center}`}
-        />
-      </Svg>
+      {/* Header */}
+      <View style={styles.headerRow}>
+        <Text style={[styles.headerLabel, { color: colors.mutedForeground }]}>DISK MAP</Text>
+        <Text style={[styles.headerTotal, { color: colors.primary }]}>{fmt(totalSpace)}</Text>
+      </View>
 
-      {/* Center text */}
-      <View style={[styles.centerContent, { width: size, height: size }]}>
-        <Text style={[styles.centerLabel, { color: colors.mutedForeground }]}>FREE</Text>
-        <Text style={[styles.centerValue, { color: colors.foreground }]}>
-          {formatBytes(freeSpace)}
-        </Text>
-        <Text style={[styles.centerSub, { color: colors.mutedForeground }]}>
-          of {formatBytes(totalSpace)}
-        </Text>
+      {/* Defrag grid */}
+      <View style={[styles.gridContainer, {
+        borderTopColor: colors.bevelLight,
+        borderLeftColor: colors.bevelLight,
+        borderBottomColor: colors.bevelDark,
+        borderRightColor: colors.bevelDark,
+        backgroundColor: colors.muted,
+      }]}>
+        <Animated.View style={styles.grid}>
+          {blocks.map((type, i) => {
+            const row = Math.floor(i / COLS);
+            const col = i % COLS;
+            let bg = colors.border;
+            if (type === 'used') bg = colors.primary + 'AA';
+            if (type === 'junk') bg = colors.accent;
+            if (type === 'free') bg = colors.border;
+            return (
+              <View
+                key={i}
+                style={[
+                  styles.block,
+                  { backgroundColor: bg },
+                  type === 'junk' && styles.junkBlock,
+                ]}
+              />
+            );
+          })}
+        </Animated.View>
       </View>
 
       {/* Legend */}
       <View style={styles.legend}>
         <View style={styles.legendItem}>
-          <View style={[styles.legendDot, { backgroundColor: colors.primary }]} />
-          <Text style={[styles.legendText, { color: colors.mutedForeground }]}>
-            Used · {formatBytes(usedSpace)}
-          </Text>
+          <View style={[styles.legendDot, { backgroundColor: colors.primary + 'AA' }]} />
+          <Text style={[styles.legendLabel, { color: colors.mutedForeground }]}>USED</Text>
+          <Text style={[styles.legendValue, { color: colors.primary }]}>{fmt(cleanUsed)}</Text>
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: colors.accent }]} />
-          <Text style={[styles.legendText, { color: colors.mutedForeground }]}>
-            Junk · {formatBytes(junkSize)}
-          </Text>
+          <Text style={[styles.legendLabel, { color: colors.mutedForeground }]}>JUNK</Text>
+          <Text style={[styles.legendValue, { color: colors.accent }]}>{fmt(junkSize)}</Text>
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: colors.border }]} />
-          <Text style={[styles.legendText, { color: colors.mutedForeground }]}>
-            Free · {formatBytes(freeSpace)}
-          </Text>
+          <Text style={[styles.legendLabel, { color: colors.mutedForeground }]}>FREE</Text>
+          <Text style={[styles.legendValue, { color: colors.foreground }]}>{fmt(freeSpace)}</Text>
         </View>
       </View>
     </View>
@@ -143,48 +117,62 @@ export default function StorageRingChart({
 }
 
 const styles = StyleSheet.create({
-  container: {
+  container: { width: '100%', gap: 10 },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  centerContent: {
-    position: 'absolute',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  centerLabel: {
-    fontSize: 11,
+  headerLabel: {
+    fontSize: 10,
     fontFamily: 'Inter_600SemiBold',
-    letterSpacing: 2,
+    letterSpacing: 3,
   },
-  centerValue: {
-    fontSize: 26,
-    fontFamily: 'Inter_700Bold',
-    marginTop: 2,
-  },
-  centerSub: {
+  headerTotal: {
     fontSize: 11,
-    fontFamily: 'Inter_400Regular',
-    marginTop: 2,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 1,
+  },
+  gridContainer: {
+    borderTopWidth: 2,
+    borderLeftWidth: 2,
+    borderBottomWidth: 2,
+    borderRightWidth: 2,
+    padding: 6,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 2,
+  },
+  block: {
+    width: 7,
+    height: 7,
+  },
+  junkBlock: {
+    opacity: 0.95,
   },
   legend: {
     flexDirection: 'row',
-    gap: 16,
-    marginTop: 16,
-    flexWrap: 'wrap',
-    justifyContent: 'center',
+    justifyContent: 'space-between',
   },
   legendItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   legendDot: {
     width: 8,
     height: 8,
-    borderRadius: 4,
   },
-  legendText: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
+  legendLabel: {
+    fontSize: 9,
+    fontFamily: 'Inter_600SemiBold',
+    letterSpacing: 1.5,
+  },
+  legendValue: {
+    fontSize: 11,
+    fontFamily: 'Inter_700Bold',
+    letterSpacing: 0.5,
   },
 });

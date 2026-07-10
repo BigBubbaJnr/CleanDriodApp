@@ -16,7 +16,6 @@ export default function CleanScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const { storageStats } = useCleaner();
-
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
@@ -25,67 +24,73 @@ export default function CleanScreen() {
       style={[styles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={[
         styles.content,
-        {
-          paddingTop: insets.top + 16 + webTopPad,
-          paddingBottom: insets.bottom + 100 + webBottomPad,
-        },
+        { paddingTop: insets.top + 20 + webTopPad, paddingBottom: insets.bottom + 100 + webBottomPad },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      <Text style={[styles.heading, { color: colors.foreground }]}>Cleaning Tools</Text>
+      {/* Header */}
+      <Text style={[styles.sysLabel, { color: colors.mutedForeground }]}>{'> MODULE SELECT'}</Text>
+      <Text style={[styles.heading, { color: colors.foreground }]}>{'// CLEANING TOOLS'}</Text>
+      <View style={[styles.divider, { backgroundColor: colors.border }]} />
       <Text style={[styles.sub, { color: colors.mutedForeground }]}>
-        All features are free — no subscriptions required
+        ALL FEATURES FREE — NO SUBSCRIPTIONS
       </Text>
 
+      {/* Section: Remove Junk */}
       <View style={styles.section}>
-        <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>REMOVE JUNK</Text>
-
+        <Text style={[styles.sectionLabel, { color: colors.primary }]}>
+          {'── JUNK REMOVAL ─────────────────────'}
+        </Text>
         <ToolCard
           title="Junk Cleaner"
           description="Old APKs, empty folders, temp files & leftover downloads"
           icon="trash-2"
-          gradientColors={[colors.primary, '#9B8FFF']}
+          gradientColors={[colors.primary, colors.primary]}
           badge={storageStats ? formatBytes(storageStats.junkEstimate) : undefined}
           onPress={() => router.push('/junk-cleaner')}
         />
-
         <ToolCard
-          title="App Cache Guide"
-          description="See which apps are hoarding cache and clear them with one tap"
+          title="Cache Cleaner"
+          description="Auto-clears accessible caches, Smart Sweep for system apps"
           icon="cpu"
-          gradientColors={['#FFA94D', '#FF6348']}
+          gradientColors={[colors.accent, colors.accent]}
           onPress={() => router.push('/app-cache')}
         />
       </View>
 
+      {/* Section: Find & Remove */}
       <View style={styles.section}>
-        <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>FIND & REMOVE</Text>
-
+        <Text style={[styles.sectionLabel, { color: colors.primary }]}>
+          {'── FILE ANALYSIS ────────────────────'}
+        </Text>
         <ToolCard
           title="Duplicate Finder"
-          description="Scan photos & files for exact duplicates wasting space"
+          description="Scans photos & files for exact duplicates wasting space"
           icon="copy"
-          gradientColors={['#51CF66', '#00C9A7']}
+          gradientColors={['#39FF14', '#39FF14']}
           onPress={() => router.push('/duplicate-finder')}
         />
-
         <ToolCard
           title="Large File Scanner"
           description="Find the biggest files hogging your storage"
           icon="hard-drive"
-          gradientColors={['#339AF0', '#7B6EFA']}
+          gradientColors={['#FFB800', '#FFB800']}
           onPress={() => router.push('/large-files')}
         />
       </View>
 
-      <View style={[styles.tipCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <Text style={[styles.tipIcon, { color: colors.accent }]}>💡</Text>
-        <View style={styles.tipContent}>
-          <Text style={[styles.tipTitle, { color: colors.foreground }]}>Pro tip</Text>
-          <Text style={[styles.tipText, { color: colors.mutedForeground }]}>
-            Run Junk Cleaner first, then check Duplicate Finder — most people find 500 MB+ to free on their first scan.
-          </Text>
-        </View>
+      {/* Pro tip — retro terminal style */}
+      <View style={[styles.tipCard, {
+        backgroundColor: colors.card,
+        borderTopColor: colors.bevelLight,
+        borderLeftColor: colors.bevelLight,
+        borderBottomColor: colors.bevelDark,
+        borderRightColor: colors.bevelDark,
+      }]}>
+        <Text style={[styles.tipHead, { color: colors.primary }]}>{'[!] SYS TIP'}</Text>
+        <Text style={[styles.tipText, { color: colors.mutedForeground }]}>
+          {'> '} Run Junk Cleaner first, then Duplicate Finder. Most users recover 500 MB+ on first scan.
+        </Text>
       </View>
     </ScrollView>
   );
@@ -93,43 +98,17 @@ export default function CleanScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { paddingHorizontal: 20 },
-  heading: {
-    fontSize: 24,
-    fontFamily: 'Inter_700Bold',
-    marginBottom: 6,
-  },
-  sub: {
-    fontSize: 13,
-    fontFamily: 'Inter_400Regular',
-    marginBottom: 28,
-    lineHeight: 18,
-  },
-  section: { marginBottom: 24 },
-  sectionLabel: {
-    fontSize: 11,
-    fontFamily: 'Inter_600SemiBold',
-    letterSpacing: 1.5,
-    marginBottom: 10,
-  },
+  content: { paddingHorizontal: 16 },
+  sysLabel: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 2, marginBottom: 4 },
+  heading: { fontSize: 20, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 10 },
+  divider: { height: 1, marginBottom: 10 },
+  sub: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 2, marginBottom: 24 },
+  section: { marginBottom: 20 },
+  sectionLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 10 },
   tipCard: {
-    flexDirection: 'row',
-    borderRadius: 16,
-    borderWidth: 1,
-    padding: 16,
-    gap: 12,
-    alignItems: 'flex-start',
+    padding: 14, gap: 8,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
-  tipIcon: { fontSize: 20 },
-  tipContent: { flex: 1 },
-  tipTitle: {
-    fontSize: 13,
-    fontFamily: 'Inter_600SemiBold',
-    marginBottom: 4,
-  },
-  tipText: {
-    fontSize: 12,
-    fontFamily: 'Inter_400Regular',
-    lineHeight: 18,
-  },
+  tipHead: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  tipText: { fontSize: 11, fontFamily: 'Inter_400Regular', lineHeight: 18 },
 });

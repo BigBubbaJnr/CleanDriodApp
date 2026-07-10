@@ -6,40 +6,35 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-function SettingRow({
-  icon,
-  title,
-  subtitle,
-  right,
-  onPress,
-  danger,
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+  return (bytes / 1024).toFixed(0) + ' KB';
+}
+
+function SysRow({
+  label, value, icon, right, onPress, danger,
 }: {
-  icon: keyof typeof Feather.glyphMap;
-  title: string;
-  subtitle?: string;
-  right?: React.ReactNode;
-  onPress?: () => void;
-  danger?: boolean;
+  label: string; value?: string; icon: keyof typeof Feather.glyphMap;
+  right?: React.ReactNode; onPress?: () => void; danger?: boolean;
 }) {
   const colors = useColors();
   return (
     <Pressable
       style={({ pressed }) => [
-        styles.row,
-        { borderBottomColor: colors.border },
-        pressed && onPress ? { backgroundColor: colors.muted } : {},
+        styles.sysRow, { borderBottomColor: colors.border },
+        pressed && onPress ? { backgroundColor: colors.primary + '08' } : {},
       ]}
       onPress={onPress}
       disabled={!onPress && !right}
     >
-      <View style={[styles.rowIcon, { backgroundColor: danger ? colors.destructive + '20' : colors.primary + '20' }]}>
-        <Feather name={icon} size={16} color={danger ? colors.destructive : colors.primary} />
+      <Text style={[styles.sysPrompt, { color: danger ? colors.destructive : colors.primary }]}>{'>'}</Text>
+      <Feather name={icon} size={13} color={danger ? colors.destructive : colors.mutedForeground} />
+      <View style={styles.sysContent}>
+        <Text style={[styles.sysRowLabel, { color: danger ? colors.destructive : colors.foreground }]}>{label.toUpperCase()}</Text>
+        {value ? <Text style={[styles.sysValue, { color: colors.mutedForeground }]}>{value}</Text> : null}
       </View>
-      <View style={styles.rowContent}>
-        <Text style={[styles.rowTitle, { color: danger ? colors.destructive : colors.foreground }]}>{title}</Text>
-        {subtitle ? <Text style={[styles.rowSub, { color: colors.mutedForeground }]}>{subtitle}</Text> : null}
-      </View>
-      {right ?? (onPress ? <Feather name="chevron-right" size={16} color={colors.mutedForeground} /> : null)}
+      {right ?? (onPress ? <Text style={[styles.arrow, { color: colors.mutedForeground }]}>{'→'}</Text> : null)}
     </Pressable>
   );
 }
@@ -54,17 +49,11 @@ export default function SettingsScreen() {
   const handleRootToggle = (val: boolean) => {
     if (val) {
       Alert.alert(
-        'Enable Root Mode?',
-        'Root mode gives CleanDroid access to system-level files for deeper cleaning. Your device must be rooted. If unsure, leave this off.',
+        'ENABLE ROOT MODE?',
+        'Root mode gives CleanDroid access to system-level files for deeper cleaning. Device must be rooted.',
         [
-          { text: 'Cancel', style: 'cancel' },
-          {
-            text: 'Enable',
-            onPress: () => {
-              setRootEnabled(true);
-              Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-            },
-          },
+          { text: 'CANCEL', style: 'cancel' },
+          { text: 'ENABLE', onPress: () => { setRootEnabled(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } },
         ]
       );
     } else {
@@ -73,56 +62,67 @@ export default function SettingsScreen() {
     }
   };
 
-  function formatBytes(bytes: number): string {
-    if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-    if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-    return (bytes / 1024).toFixed(0) + ' KB';
-  }
-
   return (
     <ScrollView
       style={[styles.container, { backgroundColor: colors.background }]}
       contentContainerStyle={[
         styles.content,
-        {
-          paddingTop: insets.top + 16 + webTopPad,
-          paddingBottom: insets.bottom + 100 + webBottomPad,
-        },
+        { paddingTop: insets.top + 20 + webTopPad, paddingBottom: insets.bottom + 100 + webBottomPad },
       ]}
       showsVerticalScrollIndicator={false}
     >
-      <Text style={[styles.heading, { color: colors.foreground }]}>Settings</Text>
+      {/* Header */}
+      <Text style={[styles.sysLabel, { color: colors.mutedForeground }]}>{'> SYS CONFIG'}</Text>
+      <Text style={[styles.heading, { color: colors.foreground }]}>SETTINGS</Text>
+      <View style={[styles.divider, { backgroundColor: colors.border }]} />
 
-      {/* Stats */}
-      <View style={[styles.statsCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: colors.primary }]}>{history.length}</Text>
-          <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Total Scans</Text>
+      {/* Stats readout — terminal-style */}
+      <View style={[styles.panel, {
+        backgroundColor: colors.card,
+        borderTopColor: colors.bevelLight,
+        borderLeftColor: colors.bevelLight,
+        borderBottomColor: colors.bevelDark,
+        borderRightColor: colors.bevelDark,
+      }]}>
+        <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
+          <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[SYSTEM REPORT]'}</Text>
         </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: colors.accent }]}>{formatBytes(totalBytesFreed)}</Text>
-          <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Freed</Text>
-        </View>
-        <View style={[styles.statDivider, { backgroundColor: colors.border }]} />
-        <View style={styles.statItem}>
-          <Text style={[styles.statValue, { color: colors.foreground }]}>Free</Text>
-          <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>Plan</Text>
+        <View style={styles.readout}>
+          {[
+            { k: 'TOTAL_SCANS', v: String(history.length).padStart(4, '0'), color: colors.primary },
+            { k: 'BYTES_FREED ', v: formatBytes(totalBytesFreed), color: colors.accent },
+            { k: 'LICENSE     ', v: 'FREE / OPEN', color: colors.success },
+            { k: 'ROOT_ACCESS ', v: rootEnabled ? 'ENABLED' : 'DISABLED', color: rootEnabled ? colors.success : colors.mutedForeground },
+          ].map(row => (
+            <View key={row.k} style={styles.readoutRow}>
+              <Text style={[styles.readoutKey, { color: colors.mutedForeground }]}>{row.k}</Text>
+              <Text style={[styles.readoutSep, { color: colors.border }]}>{' = '}</Text>
+              <Text style={[styles.readoutVal, { color: row.color }]}>{row.v}</Text>
+            </View>
+          ))}
         </View>
       </View>
 
       {/* Advanced */}
-      <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>ADVANCED</Text>
-      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <SettingRow
+      <Text style={[styles.sectionLabel, { color: colors.primary }]}>
+        {'── ADVANCED ─────────────────────────'}
+      </Text>
+      <View style={[styles.panel, {
+        backgroundColor: colors.card,
+        borderTopColor: colors.bevelLight,
+        borderLeftColor: colors.bevelLight,
+        borderBottomColor: colors.bevelDark,
+        borderRightColor: colors.bevelDark,
+      }]}>
+        <SysRow
           icon="shield"
-          title="Root Mode"
-          subtitle={rootEnabled ? 'Enabled — deeper system access' : 'Disabled — standard mode'}
+          label="Root Mode"
+          value={rootEnabled ? 'Enabled — deeper system access' : 'Disabled — standard mode'}
           right={
             <Switch
               value={rootEnabled}
               onValueChange={handleRootToggle}
-              trackColor={{ false: colors.border, true: colors.primary + '80' }}
+              trackColor={{ false: colors.border, true: colors.primary + '60' }}
               thumbColor={rootEnabled ? colors.primary : colors.mutedForeground}
             />
           }
@@ -130,34 +130,34 @@ export default function SettingsScreen() {
       </View>
 
       {/* About */}
-      <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>ABOUT</Text>
-      <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
-        <SettingRow
-          icon="info"
-          title="CleanDroid"
-          subtitle="Version 1.0.0"
-        />
-        <SettingRow
-          icon="heart"
-          title="Free & Open"
-          subtitle="No subscriptions, no paywalls — ever"
-        />
-        <SettingRow
-          icon="lock"
-          title="Privacy"
-          subtitle="All cleaning happens on-device. No data leaves your phone."
-        />
+      <Text style={[styles.sectionLabel, { color: colors.primary }]}>
+        {'── ABOUT ────────────────────────────'}
+      </Text>
+      <View style={[styles.panel, {
+        backgroundColor: colors.card,
+        borderTopColor: colors.bevelLight,
+        borderLeftColor: colors.bevelLight,
+        borderBottomColor: colors.bevelDark,
+        borderRightColor: colors.bevelDark,
+      }]}>
+        <SysRow icon="info" label="CleanDroid" value="Version 1.0.0" />
+        <SysRow icon="heart" label="Free & Open" value="No subscriptions, no paywalls — ever" />
+        <SysRow icon="lock" label="Privacy" value="All cleaning on-device. No data leaves your phone." />
       </View>
 
-      {/* Free pledge */}
-      <View style={[styles.pledgeCard, { backgroundColor: colors.primary + '12', borderColor: colors.primary + '30' }]}>
-        <Feather name="award" size={20} color={colors.primary} />
-        <View style={{ flex: 1 }}>
-          <Text style={[styles.pledgeTitle, { color: colors.foreground }]}>Our Free Promise</Text>
-          <Text style={[styles.pledgeText, { color: colors.mutedForeground }]}>
-            CleanDroid will always be free. Every feature. No "Pro" tier, no membership, no locked tools.
-          </Text>
-        </View>
+      {/* Free pledge — retro box */}
+      <View style={[styles.pledgeBox, {
+        borderColor: colors.primary + '50',
+        backgroundColor: colors.primary + '07',
+        borderTopColor: colors.primary + '30',
+        borderLeftColor: colors.primary + '30',
+        borderBottomColor: colors.primary + '80',
+        borderRightColor: colors.primary + '80',
+      }]}>
+        <Text style={[styles.pledgeTitle, { color: colors.primary }]}>{'[!] FREE PROMISE'}</Text>
+        <Text style={[styles.pledgeText, { color: colors.mutedForeground }]}>
+          {'> '} CleanDroid will always be free. Every feature. No "Pro" tier, no membership, no locked tools. Ever.
+        </Text>
       </View>
     </ScrollView>
   );
@@ -165,34 +165,35 @@ export default function SettingsScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1 },
-  content: { paddingHorizontal: 20 },
-  heading: { fontSize: 24, fontFamily: 'Inter_700Bold', marginBottom: 20 },
-  statsCard: {
-    flexDirection: 'row', borderRadius: 16, borderWidth: 1,
-    padding: 20, marginBottom: 24, alignItems: 'center',
+  content: { paddingHorizontal: 16 },
+  sysLabel: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 2, marginBottom: 4 },
+  heading: { fontSize: 22, fontFamily: 'Inter_700Bold', letterSpacing: 3, marginBottom: 10 },
+  divider: { height: 1, marginBottom: 20 },
+  sectionLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 10 },
+  panel: {
+    marginBottom: 20,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+    overflow: 'hidden',
   },
-  statItem: { flex: 1, alignItems: 'center', gap: 4 },
-  statValue: { fontSize: 20, fontFamily: 'Inter_700Bold' },
-  statLabel: { fontSize: 11, fontFamily: 'Inter_400Regular' },
-  statDivider: { width: 1, height: 36, marginHorizontal: 8 },
-  sectionLabel: {
-    fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5, marginBottom: 10,
+  panelHeader: { padding: 10, borderBottomWidth: 1 },
+  panelTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  readout: { padding: 12, gap: 6 },
+  readoutRow: { flexDirection: 'row' },
+  readoutKey: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, width: 130 },
+  readoutSep: { fontSize: 11, fontFamily: 'Inter_400Regular' },
+  readoutVal: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+  sysRow: {
+    flexDirection: 'row', alignItems: 'center', padding: 13, gap: 10, borderBottomWidth: 1,
   },
-  card: { borderRadius: 16, borderWidth: 1, overflow: 'hidden', marginBottom: 24 },
-  row: {
-    flexDirection: 'row', alignItems: 'center', padding: 14,
-    gap: 12, borderBottomWidth: 1,
+  sysPrompt: { fontSize: 12, fontFamily: 'Inter_700Bold' },
+  sysContent: { flex: 1 },
+  sysRowLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  sysValue: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5, marginTop: 2 },
+  arrow: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+  pledgeBox: {
+    padding: 16, gap: 8,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
-  rowIcon: {
-    width: 34, height: 34, borderRadius: 10, alignItems: 'center', justifyContent: 'center',
-  },
-  rowContent: { flex: 1 },
-  rowTitle: { fontSize: 14, fontFamily: 'Inter_500Medium' },
-  rowSub: { fontSize: 12, fontFamily: 'Inter_400Regular', marginTop: 2 },
-  pledgeCard: {
-    flexDirection: 'row', borderRadius: 16, borderWidth: 1,
-    padding: 16, gap: 12, alignItems: 'flex-start',
-  },
-  pledgeTitle: { fontSize: 14, fontFamily: 'Inter_600SemiBold', marginBottom: 4 },
-  pledgeText: { fontSize: 12, fontFamily: 'Inter_400Regular', lineHeight: 18 },
+  pledgeTitle: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  pledgeText: { fontSize: 11, fontFamily: 'Inter_400Regular', lineHeight: 18 },
 });
