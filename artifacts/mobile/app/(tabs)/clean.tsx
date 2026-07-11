@@ -57,6 +57,14 @@ export default function CleanScreen() {
           onPress={() => router.push('/storage-intel')}
         />
         <ToolCard
+          title="Storage Map"
+          description="WinDirStat-style source app breakdown — Camera, WhatsApp, Telegram, Instagram and more"
+          icon="map"
+          gradientColors={[colors.primary, colors.primary]}
+          badge={mediaBreakdown ? 'READY' : undefined}
+          onPress={() => router.push('/storage-tree')}
+        />
+        <ToolCard
           title="Screenshot Manager"
           description="Browse, select and delete screenshots — they accumulate silently and are easy to miss"
           icon="monitor"

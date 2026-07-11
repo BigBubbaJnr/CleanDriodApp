@@ -1,3 +1,4 @@
 - [CleanDroid real-scan architecture](cleandroid-scan-arch.md) — all scans use real APIs; MediaLibrary/FileSystem only; no fake data; sizes estimated from dimensions/duration.
 - [CleanDroid scan journal](cleandroid-scan-journal.md) — ScanJournalEntry in context; persisted to cleandroid_journal; journal shown in Schedule tab replacing EXECUTION LOG.
 - [CleanDroid stability & Play Store pass](cleandroid-stability-playstore.md) — error hardening, context memo, permission cleanup, settings improvements, accessibility baseline.
+- [CleanDroid Storage Intelligence Engine](cleandroid-storage-engine.md) — unified scan architecture: RichAsset/RichScanData/SmartCategory in context; tool screens use 30-min cache; storage-tree.tsx is new WinDirStat-style screen.

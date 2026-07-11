@@ -96,7 +96,7 @@ const FILTERS: { key: FilterType; label: string }[] = [
 export default function LargeFilesScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats, richScanData } = useCleaner();
 
   const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done' | 'error'>('idle');
   const scanStartRef = useRef<number>(0);
@@ -137,6 +137,43 @@ export default function LargeFilesScreen() {
       setFiles([]);
       setPhase('results');
       return;
+    }
+
+    // ── Fast path: use cached Storage Intelligence data (< 30 min old) ────────
+    const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
+    if (richScanData && richScanData.timestamp) {
+      const cacheAge = Date.now() - new Date(richScanData.timestamp).getTime();
+      if (cacheAge < CACHE_MAX_AGE_MS) {
+        setScanStatus('USING CACHED SCAN — INSTANT RESULTS');
+        setScanProgress(100);
+        const nowMs = Date.now();
+        const cachedFiles: LargeFile[] = richScanData.assets
+          .filter(a => {
+            if (a.mediaType === 'photo') return a.estimatedSize >= 1_000_000;
+            if (a.mediaType === 'video') return a.estimatedSize >= 10_000_000;
+            return false;
+          })
+          .slice(0, 200)
+          .map(a => {
+            const ageDays = Math.floor((nowMs - a.creationTime * 1000) / 86_400_000);
+            const type: LargeFileType = a.mediaType === 'video' ? 'video' : 'image';
+            return {
+              id: a.id, assetId: a.id, name: a.filename,
+              size: a.estimatedSize, sizeIsReal: false,
+              type, uri: a.uri, creationTime: a.creationTime,
+              ageText: getAgeText(a.creationTime), ageDays,
+              recommendation: getRecommendation(type, ageDays, a.estimatedSize),
+              selected: false,
+            };
+          });
+        await sleep(200);
+        setFiles(cachedFiles);
+        setPhase('verifying');
+        await sleep(800);
+        setPhase('results');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        return;
+      }
     }
 
     // ── Phase 1: paginate all photos and videos ──────────────────────────────

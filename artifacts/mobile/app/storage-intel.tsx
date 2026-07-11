@@ -359,7 +359,7 @@ export default function StorageIntelScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
   const {
-    storageStats, mediaBreakdown, snapshots,
+    storageStats, mediaBreakdown, richScanData, snapshots,
     scanMediaLibrary, addScanSnapshot,
     journal,
   } = useCleaner();
@@ -707,6 +707,59 @@ export default function StorageIntelScreen() {
                 );
               })}
             </View>
+
+            {/* ── Smart Categories (Storage Intelligence Engine) ── */}
+            {richScanData && richScanData.smartCategories.length > 0 && (
+              <>
+                <Text style={[styles.sectionLabel, { color: colors.primary }]}>
+                  {'── SMART CATEGORIES ─────────────────'}
+                </Text>
+                <View style={[styles.catPanel, bevel, { backgroundColor: colors.card }]}>
+                  <Text style={[styles.panelHead, { color: colors.primary }]}>
+                    {'[BY SOURCE APP]'}
+                    <Text style={[styles.estNote, { color: colors.mutedForeground }]}>{' · detected from album names'}</Text>
+                  </Text>
+                  {richScanData.smartCategories.map((cat, idx) => {
+                    const catTotal = richScanData.smartCategories.reduce((s, c) => s + c.estimatedSize, 0);
+                    const share = catTotal > 0 ? cat.estimatedSize / catTotal : 0;
+                    const catColor =
+                      idx === 0 ? colors.primary :
+                      idx === 1 ? colors.accent :
+                      idx === 2 ? colors.success :
+                      idx === 3 ? colors.warning : colors.mutedForeground;
+                    return (
+                      <View
+                        key={cat.sourceApp}
+                        style={[
+                          styles.catRow,
+                          idx < richScanData.smartCategories.length - 1 && {
+                            borderBottomWidth: 1, borderBottomColor: colors.border,
+                          },
+                        ]}
+                      >
+                        <View style={[styles.catIconBox, { borderColor: catColor + '40' }]}>
+                          <Feather name={cat.icon as never} size={13} color={catColor} />
+                        </View>
+                        <View style={styles.catInfo}>
+                          <View style={styles.catTopRow}>
+                            <Text style={[styles.catLabel, { color: colors.foreground }]}>
+                              {cat.label.toUpperCase()}
+                            </Text>
+                            <Text style={[styles.catSize, { color: catColor }]}>~{formatBytes(cat.estimatedSize)}</Text>
+                          </View>
+                          <Text style={[styles.catCount, { color: colors.mutedForeground }]}>
+                            {cat.count.toLocaleString()} items
+                          </Text>
+                          <View style={{ marginTop: 5 }}>
+                            <SegBar value={share} color={catColor} total={20} />
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })}
+                </View>
+              </>
+            )}
 
             {/* ── Folder Intelligence ── */}
             {albumBreakdown.length > 0 && (

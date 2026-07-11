@@ -42,7 +42,7 @@ function estimateScreenshotSize(w: number, h: number): number {
 export default function ScreenshotManagerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats, richScanData } = useCleaner();
 
   const [phase, setPhase] = useState<'idle' | 'loading' | 'verifying' | 'results' | 'deleting' | 'done' | 'error'>('idle');
   const scanStartRef = useRef<number>(0);
@@ -73,6 +73,32 @@ export default function ScreenshotManagerScreen() {
       setLoadStatus('[!] permission denied');
       setPhase('results');
       return;
+    }
+
+    // ── Fast path: use cached Storage Intelligence data (< 30 min old) ────────
+    const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
+    if (richScanData && richScanData.timestamp) {
+      const cacheAge = Date.now() - new Date(richScanData.timestamp).getTime();
+      if (cacheAge < CACHE_MAX_AGE_MS) {
+        setLoadStatus('USING CACHED SCAN — INSTANT RESULTS');
+        const cachedItems: ScreenshotItem[] = richScanData.assets
+          .filter(a => a.isScreenshot)
+          .map(a => ({
+            id: a.id, assetId: a.id,
+            uri: a.uri, width: a.width, height: a.height,
+            creationTime: a.creationTime, filename: a.filename,
+            // PNG screenshots: ~0.4 bytes/pixel (vs 0.2 for JPEG)
+            estimatedSize: Math.round(a.width * a.height * 0.4),
+            selected: false,
+          }))
+          .sort((a, b) => b.creationTime - a.creationTime);
+        setScreenshots(cachedItems);
+        setPhase('verifying');
+        await sleep(600);
+        setPhase('results');
+        Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        return;
+      }
     }
 
     setLoadStatus('LOCATING SCREENSHOTS ALBUM...');

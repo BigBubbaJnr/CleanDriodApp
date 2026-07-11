@@ -101,11 +101,72 @@ export async function getRealFileSize(uri: string): Promise<number | null> {
   return null;
 }
 
+// ── Storage Intelligence Engine — source app types & rich scan data ───────────
+
+export type SourceApp =
+  | 'camera' | 'whatsapp' | 'telegram' | 'instagram' | 'snapchat'
+  | 'tiktok' | 'twitter' | 'facebook' | 'signal' | 'discord'
+  | 'screen_recording' | 'screenshots' | 'downloads' | 'other';
+
+export const SOURCE_APP_META: Record<SourceApp, { label: string; icon: string }> = {
+  camera:           { label: 'Camera',            icon: 'camera' },
+  whatsapp:         { label: 'WhatsApp',           icon: 'message-circle' },
+  telegram:         { label: 'Telegram',           icon: 'send' },
+  instagram:        { label: 'Instagram',          icon: 'aperture' },
+  snapchat:         { label: 'Snapchat',           icon: 'zap' },
+  tiktok:           { label: 'TikTok',             icon: 'video' },
+  twitter:          { label: 'Twitter / X',        icon: 'at-sign' },
+  facebook:         { label: 'Facebook',           icon: 'users' },
+  signal:           { label: 'Signal',             icon: 'lock' },
+  discord:          { label: 'Discord',            icon: 'hash' },
+  screen_recording: { label: 'Screen Recordings',  icon: 'play-circle' },
+  screenshots:      { label: 'Screenshots',        icon: 'monitor' },
+  downloads:        { label: 'Downloads',          icon: 'download' },
+  other:            { label: 'Other Media',        icon: 'folder' },
+};
+
+export interface RichAsset {
+  id: string;
+  filename: string;
+  uri: string;
+  mediaType: 'photo' | 'video' | 'audio';
+  width: number;
+  height: number;
+  /** Seconds */
+  duration: number;
+  /** Seconds since epoch */
+  creationTime: number;
+  estimatedSize: number;
+  sourceApp: SourceApp;
+  isScreenshot: boolean;
+  isDownload: boolean;
+}
+
+export interface SmartCategory {
+  sourceApp: SourceApp;
+  label: string;
+  /** Feather icon name */
+  icon: string;
+  count: number;
+  estimatedSize: number;
+}
+
+export interface RichScanData {
+  /** ISO timestamp when this scan was taken */
+  timestamp: string;
+  /** All scanned assets, sorted by estimatedSize desc (capped at 3000) */
+  assets: RichAsset[];
+  totalAssetCount: number;
+  /** Grouped by source app, sorted by estimatedSize desc */
+  smartCategories: SmartCategory[];
+}
+
 interface CleanerContextType {
   storageStats: StorageStats | null;
   isLoadingStats: boolean;
   isStatsError: boolean;
   mediaBreakdown: MediaBreakdown | null;
+  richScanData: RichScanData | null;
   snapshots: ScanSnapshot[];
   history: CleanHistoryItem[];
   totalBytesFreed: number;
@@ -155,6 +216,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   const [isLoadingStats, setIsLoadingStats] = useState(true);
   const [isStatsError, setIsStatsError] = useState(false);
   const [mediaBreakdown, setMediaBreakdown] = useState<MediaBreakdown | null>(null);
+  const [richScanData, setRichScanData] = useState<RichScanData | null>(null);
   const [snapshots, setSnapshots] = useState<ScanSnapshot[]>([]);
   const [journal, setJournal] = useState<ScanJournalEntry[]>([]);
   const [history, setHistory] = useState<CleanHistoryItem[]>([]);
@@ -297,6 +359,116 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       onLog?.(`scan complete — ${allAssets.length} items analysed`);
 
       setMediaBreakdown(breakdown);
+
+      // ── Build rich scan data (Storage Intelligence Engine) ────────────────
+      // Detects source apps (WhatsApp, Telegram, Instagram, etc.) from album
+      // membership, then builds SmartCategory[] for the Storage Map screen.
+      // This is best-effort — any failure here leaves breakdown intact.
+      try {
+        onLog?.('building source app categories...');
+
+        // Priority map: asset id → SourceApp
+        // Screenshots and downloads are already detected above.
+        const sourceMap = new Map<string, SourceApp>();
+        screenshotIds.forEach(id => sourceMap.set(id, 'screenshots'));
+        downloadIds.forEach(id  => sourceMap.set(id, 'downloads'));
+
+        // Named source-app patterns (order = tie-break priority, lower = wins)
+        const namedApps: Array<{ pattern: string; app: SourceApp }> = [
+          { pattern: 'whatsapp',       app: 'whatsapp' },
+          { pattern: 'telegram',       app: 'telegram' },
+          { pattern: 'instagram',      app: 'instagram' },
+          { pattern: 'snapchat',       app: 'snapchat' },
+          { pattern: 'tiktok',         app: 'tiktok' },
+          { pattern: 'musically',      app: 'tiktok' },
+          { pattern: 'signal',         app: 'signal' },
+          { pattern: 'discord',        app: 'discord' },
+          { pattern: 'screen record',  app: 'screen_recording' },
+          { pattern: 'screenrecord',   app: 'screen_recording' },
+          { pattern: 'twitter',        app: 'twitter' },
+          { pattern: 'facebook',       app: 'facebook' },
+        ];
+
+        // Fetch one page (≤2000 assets) per matched album, in parallel
+        await Promise.all(namedApps.map(async ({ pattern, app }) => {
+          const match = albums.find(a => a.title.toLowerCase().includes(pattern));
+          if (!match || match.assetCount === 0) return;
+          try {
+            const page = await MediaLibrary.getAssetsAsync({
+              first: 2000, album: match,
+              mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video, MediaLibrary.MediaType.audio],
+            });
+            page.assets.forEach(a => {
+              if (!sourceMap.has(a.id)) sourceMap.set(a.id, app);
+            });
+          } catch { /* skip inaccessible album */ }
+        }));
+
+        // Build RichAsset[] — annotate every scanned asset with its sourceApp
+        const richAssets: RichAsset[] = allAssets.map(a => {
+          // Fallback: photos → camera, video/audio → other
+          const sourceApp: SourceApp = sourceMap.get(a.id)
+            ?? (a.mediaType === MediaLibrary.MediaType.photo ? 'camera' : 'other');
+          const size =
+            a.mediaType === MediaLibrary.MediaType.video ? estimateVideoSize(a.duration)
+            : a.mediaType === MediaLibrary.MediaType.audio ? estimateAudioSize(a.duration)
+            : estimateImageSize(a.width, a.height);
+          return {
+            id: a.id,
+            filename: a.filename,
+            uri: a.uri,
+            mediaType:
+              a.mediaType === MediaLibrary.MediaType.video ? 'video'
+              : a.mediaType === MediaLibrary.MediaType.audio ? 'audio'
+              : 'photo',
+            width: a.width,
+            height: a.height,
+            duration: a.duration,
+            creationTime: a.creationTime,
+            estimatedSize: size,
+            sourceApp,
+            isScreenshot: screenshotIds.has(a.id),
+            isDownload: downloadIds.has(a.id),
+          };
+        });
+
+        // Sort largest-first (used by large-files cache)
+        richAssets.sort((a, b) => b.estimatedSize - a.estimatedSize);
+
+        // Build SmartCategory[] — group by sourceApp
+        const catMap = new Map<SourceApp, SmartCategory>();
+        for (const asset of richAssets) {
+          const existing = catMap.get(asset.sourceApp);
+          if (existing) {
+            existing.count++;
+            existing.estimatedSize += asset.estimatedSize;
+          } else {
+            const meta = SOURCE_APP_META[asset.sourceApp];
+            catMap.set(asset.sourceApp, {
+              sourceApp: asset.sourceApp,
+              label: meta.label,
+              icon: meta.icon,
+              count: 1,
+              estimatedSize: asset.estimatedSize,
+            });
+          }
+        }
+        const smartCategories = Array.from(catMap.values())
+          .filter(c => c.count >= 2 || c.estimatedSize > 100_000)
+          .sort((a, b) => b.estimatedSize - a.estimatedSize);
+
+        setRichScanData({
+          timestamp: new Date().toISOString(),
+          assets: richAssets,
+          totalAssetCount: allAssets.length,
+          smartCategories,
+        });
+
+        onLog?.(`source analysis: ${smartCategories.length} app categor${smartCategories.length !== 1 ? 'ies' : 'y'} detected`);
+      } catch {
+        // Rich scan data is best-effort — breakdown result is unaffected
+      }
+
       return breakdown;
     } catch (e) {
       onLog?.(`[!] scan error: ${String(e)}`);
@@ -385,12 +557,12 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const contextValue = useMemo(() => ({
-    storageStats, isLoadingStats, isStatsError, mediaBreakdown, snapshots,
+    storageStats, isLoadingStats, isStatsError, mediaBreakdown, richScanData, snapshots,
     history, totalBytesFreed, scheduleSettings, rootEnabled,
     journal, refreshStats, scanMediaLibrary, addScanSnapshot,
     addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
   }), [
-    storageStats, isLoadingStats, isStatsError, mediaBreakdown, snapshots,
+    storageStats, isLoadingStats, isStatsError, mediaBreakdown, richScanData, snapshots,
     history, totalBytesFreed, scheduleSettings, rootEnabled,
     journal, refreshStats, scanMediaLibrary, addScanSnapshot,
     addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
