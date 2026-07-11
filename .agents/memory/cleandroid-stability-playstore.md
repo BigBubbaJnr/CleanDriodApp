@@ -57,12 +57,20 @@ All 6 tool screen back buttons: accessibilityLabel="Go back" accessibilityRole="
 - Created `README.md` — external docs with FAQ answers for "why are sizes estimated?" and "why can't you clean app caches?"
 - Created `CLEANDROID_PRINCIPLES.md` — 8 product principles; north star for all future decisions
 
+## Final Engineering Pass (done this session)
+- `refreshStats()` no longer fabricates 64 GB / 42 GB on error; `isStatsError: boolean` added to context; home screen shows honest error state instead of fake data
+- `large-files.tsx` results phase restructured: FlatList replaces ScrollView+map; `ListHeaderComponent` holds count panel; `ListEmptyComponent` holds empty state; initialNumToRender=15, windowSize=5 — real virtualization for up to 200 items
+- `index.tsx` adds `[STORAGE COMPARISON]` panel (snapshots.length ≥ 2): shows last scan vs today used space, delta with ▲/▼ indicator — ChatGPT's explicitly requested feature
+- `app-cache.tsx` adds `[WHY ANDROID LIMITS THIS]` educational panel explaining the OS-level restriction before Step 2 Smart Sweep
+- `expo-notifications` removed from package.json (genuinely unused — never imported anywhere)
+- All changes: `tsc --noEmit` exits 0
+
 ## Outstanding (not yet done)
 - Background task registration (expo-background-fetch + expo-task-manager installed, task not registered)
 - Real app icon (all densities + adaptive icon for Android)
 - Privacy Policy URL + Feedback email (placeholders in settings.tsx constants)
 - Full accessibility pass (only back buttons + scan buttons done; list items, toggle, etc. remain)
-- FlatList for large item lists (currently ScrollView+map — can lag with 200+ items)
+- FlatList for junk-cleaner.tsx and duplicate-finder.tsx (bounded item counts, lower priority)
 - Play Store listing assets (screenshots, feature graphic, store description)
 - AdMob integration
-- Onboarding / first-run flow
+- Onboarding / first-run flow explaining Android limitations on first launch

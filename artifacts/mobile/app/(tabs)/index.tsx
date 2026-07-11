@@ -140,7 +140,7 @@ export default function HomeScreen() {
   const bevel = useBevel();
   const insets = useSafeAreaInsets();
   const {
-    storageStats, isLoadingStats, history, totalBytesFreed, refreshStats,
+    storageStats, isLoadingStats, isStatsError, history, totalBytesFreed, refreshStats,
     mediaBreakdown, snapshots,
   } = useCleaner();
   const [refreshing, setRefreshing] = useState(false);
@@ -265,6 +265,15 @@ export default function HomeScreen() {
             usedSpace={storageStats.usedSpace}
             junkSize={storageStats.appCacheSize}
           />
+        ) : isStatsError ? (
+          <View style={styles.loading}>
+            <Text style={[styles.loadingText, { color: colors.accent }]}>
+              {'[!] STORAGE STATS UNAVAILABLE'}
+            </Text>
+            <Text style={[styles.loadingSubText, { color: colors.mutedForeground }]}>
+              {'Android filesystem API returned no data — run on a real device'}
+            </Text>
+          </View>
         ) : (
           <View style={styles.loading}>
             <SegBar value={0.6} color={colors.primary} />
@@ -295,6 +304,51 @@ export default function HomeScreen() {
               <SegBar value={s.pct} color={s.color} total={10} />
             </View>
           ))}
+        </View>
+      )}
+
+      {/* ── Storage Comparison ── */}
+      {snapshots.length >= 2 && (
+        <View style={styles.section}>
+          <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>
+            {'── STORAGE COMPARISON ────────────'}
+          </Text>
+          <View style={[styles.statusCard, bevel, { backgroundColor: colors.card }]}>
+            <View style={[styles.compRow, { borderBottomColor: colors.border }]}>
+              <View style={styles.compCol}>
+                <Text style={[styles.compLabel, { color: colors.mutedForeground }]}>LAST SCAN</Text>
+                <Text style={[styles.compValue, { color: colors.foreground }]}>
+                  {formatBytes(snapshots[1].usedSpace)}
+                </Text>
+                <Text style={[styles.compSub, { color: colors.mutedForeground }]}>
+                  {formatRelativeDate(snapshots[1].timestamp).toUpperCase()}
+                </Text>
+              </View>
+              <Feather name="arrow-right" size={16} color={colors.border} />
+              <View style={[styles.compCol, { alignItems: 'flex-end' }]}>
+                <Text style={[styles.compLabel, { color: colors.mutedForeground }]}>TODAY</Text>
+                <Text style={[styles.compValue, { color: colors.foreground }]}>
+                  {formatBytes(snapshots[0].usedSpace)}
+                </Text>
+                <Text style={[styles.compSub, { color: colors.mutedForeground }]}>
+                  {formatRelativeDate(snapshots[0].timestamp).toUpperCase()}
+                </Text>
+              </View>
+            </View>
+            {storageDelta !== null && (
+              <View style={styles.compDeltaRow}>
+                <Text style={[styles.compDelta, {
+                  color: storageDelta > 0 ? colors.accent : storageDelta < 0 ? colors.success : colors.mutedForeground,
+                }]}>
+                  {storageDelta > 0
+                    ? `▲ ${formatBytes(storageDelta)} GROWTH`
+                    : storageDelta < 0
+                      ? `▼ ${formatBytes(Math.abs(storageDelta))} RECOVERED`
+                      : '= NO CHANGE DETECTED'}
+                </Text>
+              </View>
+            )}
+          </View>
         </View>
       )}
 
@@ -453,6 +507,7 @@ const styles = StyleSheet.create({
   },
   loading: { gap: 12, paddingVertical: 20 },
   loadingText: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
+  loadingSubText: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5, lineHeight: 15 },
 
   // Scan button
   scanWrapper: { alignItems: 'center', marginBottom: 20, position: 'relative' },
@@ -503,6 +558,18 @@ const styles = StyleSheet.create({
   recoRow: { flexDirection: 'row', alignItems: 'center', padding: 10, gap: 8, borderTopWidth: 1 },
   recoText: { flex: 1, fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
   recoArrow: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+
+  // Storage Comparison
+  compRow: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    padding: 14, borderBottomWidth: 1,
+  },
+  compCol: { gap: 3 },
+  compLabel: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5 },
+  compValue: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+  compSub: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+  compDeltaRow: { padding: 12, alignItems: 'center' },
+  compDelta: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 1.5 },
 
   // Activity log
   logCard: {

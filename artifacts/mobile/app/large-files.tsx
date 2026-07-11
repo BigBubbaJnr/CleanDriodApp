@@ -8,9 +8,10 @@
  *
  * Per-file info shown: name, size (real/est), type, age, recommendation.
  */
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  FlatList,
   Platform,
   Pressable,
   ScrollView,
@@ -238,10 +239,53 @@ export default function LargeFilesScreen() {
   const toggleFile = (id: string) =>
     setFiles(prev => prev.map(f => f.id === id ? { ...f, selected: !f.selected } : f));
 
-  const filtered = files.filter(f => filter === 'all' || f.type === filter);
-  const selected = files.filter(f => f.selected);
-  const selectedSize = selected.reduce((acc, f) => acc + f.size, 0);
-  const realCount = files.filter(f => f.sizeIsReal).length;
+  const filtered = useMemo(() => files.filter(f => filter === 'all' || f.type === filter), [files, filter]);
+  const selected = useMemo(() => files.filter(f => f.selected), [files]);
+  const selectedSize = useMemo(() => selected.reduce((acc, f) => acc + f.size, 0), [selected]);
+  const realCount = useMemo(() => files.filter(f => f.sizeIsReal).length, [files]);
+  const filteredTotalSize = useMemo(() => filtered.reduce((a, f) => a + f.size, 0), [filtered]);
+
+  const renderFileItem = useCallback(({ item: file, index }: { item: LargeFile; index: number }) => (
+    <Pressable
+      key={file.id}
+      style={[
+        styles.fileRow,
+        index < filtered.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+        file.selected && { backgroundColor: colors.accent + '08' },
+        index === 0 && { borderTopLeftRadius: 0, borderTopRightRadius: 0 },
+      ]}
+      onPress={() => toggleFile(file.id)}
+    >
+      <View style={[styles.fileIconBox, { borderColor: TYPE_COLORS[file.type] + '50' }]}>
+        <Feather name={TYPE_ICONS[file.type]} size={14} color={TYPE_COLORS[file.type]} />
+      </View>
+      <View style={styles.fileInfo}>
+        <View style={styles.fileTopRow}>
+          <Text style={[styles.fileName, { color: colors.foreground }]} numberOfLines={1}>
+            {file.name}
+          </Text>
+          <Text style={[styles.fileSize, {
+            color: file.selected ? colors.accent : TYPE_COLORS[file.type],
+          }]}>
+            {file.sizeIsReal ? '' : '~'}{formatBytes(file.size)}
+          </Text>
+        </View>
+        <View style={styles.fileBottomRow}>
+          <Text style={[styles.fileAge, { color: colors.mutedForeground }]}>{file.ageText}</Text>
+          <Text style={[styles.fileDot, { color: colors.border }]}>{' · '}</Text>
+          <Text style={[styles.fileReco, { color: colors.mutedForeground }]} numberOfLines={1}>
+            {file.recommendation}
+          </Text>
+        </View>
+      </View>
+      <View style={[styles.checkbox, {
+        backgroundColor: file.selected ? colors.accent : 'transparent',
+        borderColor: file.selected ? colors.accent : colors.border,
+      }]}>
+        {file.selected && <Text style={styles.checkMark}>✓</Text>}
+      </View>
+    </Pressable>
+  ), [filtered, toggleFile, colors, accentAmber]);
 
   const handleDelete = async () => {
     if (selected.length === 0) return;
@@ -302,7 +346,7 @@ export default function LargeFilesScreen() {
       </View>
 
       {/* ── Filter bar ── */}
-      {phase === 'results' && (
+      {(phase === 'results' || phase === 'cleaning') && (
         <View style={[styles.filterBar, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
             {FILTERS.map(f => {
@@ -333,199 +377,158 @@ export default function LargeFilesScreen() {
         </View>
       )}
 
-      <ScrollView
-        contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 + webBottomPad }]}
-        showsVerticalScrollIndicator={false}
-      >
-        {/* ── IDLE ── */}
-        {phase === 'idle' && (
-          <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.idleIconBox, bevel, { backgroundColor: colors.card }]}>
-              <Feather name="hard-drive" size={44} color={accentAmber} />
-            </View>
-            <Text style={[styles.idleTitle, { color: colors.foreground }]}>LARGE FILE SCANNER</Text>
-            <View style={[styles.infoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
-              <Text style={[styles.infoTitle, { color: accentAmber }]}>{'[SCAN METHOD]'}</Text>
-              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
-                {'[+] '} Scans all photos and videos via MediaLibrary
-              </Text>
-              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
-                {'[+] '} Real sizes measured for top 30 files
-              </Text>
-              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
-                {'[+] '} Age and safety recommendation per file
-              </Text>
-              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
-                {'[i] '} Remaining sizes estimated from dimensions
-              </Text>
-            </View>
-            <Pressable onPress={startScan} style={styles.fullWidth} accessibilityLabel="Start large file scan" accessibilityRole="button">
-              <View style={[styles.primaryBtn, {
-                backgroundColor: accentAmber,
-                borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
-                borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
-                borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-              }]}>
-                <Feather name="search" size={16} color="#000" />
-                <Text style={[styles.primaryBtnText, { color: '#000' }]}>{'>> SCAN FILES'}</Text>
-              </View>
-            </Pressable>
-          </Animated.View>
-        )}
-
-        {/* ── SCANNING ── */}
-        {phase === 'scanning' && (
-          <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.scanBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.scanTitle, { color: accentAmber }]}>{'[SCANNING...]'}</Text>
-              <Text style={[styles.scanPct, { color: accentAmber }]}>
-                {String(scanProgress).padStart(3, '0')}%
-              </Text>
-              <SegBar value={scanProgress / 100} color={accentAmber} />
-              <Text style={[styles.scanStatus, { color: colors.mutedForeground }]}>{'> '}{scanStatus}</Text>
-            </View>
-          </Animated.View>
-        )}
-
-        {/* ── ERROR ── */}
-        {phase === 'error' && (
-          <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.errorBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.errorTitle, { color: accentAmber }]}>{'[SCAN FAILED]'}</Text>
-              <Text style={[styles.errorMsg, { color: colors.mutedForeground }]}>
-                {'> '}{scanError ?? 'UNEXPECTED ERROR — CHECK PERMISSIONS'}
-              </Text>
-              <Pressable onPress={() => { setScanError(null); setPhase('idle'); }} style={styles.fullWidth}>
-                <View style={[styles.retryBtn, {
-                  backgroundColor: accentAmber,
-                  borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
-                  borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
-                  borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-                }]}>
-                  <Feather name="refresh-cw" size={14} color="#000" />
-                  <Text style={[styles.retryBtnText, { color: '#000' }]}>{'>> TRY AGAIN'}</Text>
-                </View>
-              </Pressable>
-            </View>
-          </Animated.View>
-        )}
-
-        {/* ── VERIFYING ── */}
-        {phase === 'verifying' && (
-          <Animated.View entering={FadeIn} style={styles.center}>
-            <VerifyingPanel color={accentAmber} />
-          </Animated.View>
-        )}
-
-        {/* ── RESULTS ── */}
-        {(phase === 'results' || phase === 'cleaning') && (
-          <Animated.View entering={FadeIn} style={{ gap: 8 }}>
-            {/* Count bar */}
-            <View style={[styles.countPanel, bevel, { backgroundColor: colors.card }]}>
+      {/* ── Results phase: FlatList for virtualized rendering ── */}
+      {(phase === 'results' || phase === 'cleaning') ? (
+        <FlatList
+          data={filtered}
+          keyExtractor={item => item.id}
+          renderItem={renderFileItem}
+          initialNumToRender={15}
+          maxToRenderPerBatch={10}
+          windowSize={5}
+          removeClippedSubviews={false}
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={[styles.flatContent, { paddingBottom: insets.bottom + 100 + webBottomPad }]}
+          ListHeaderComponent={
+            <View style={[styles.countPanel, bevel, { backgroundColor: colors.card, marginBottom: 8 }]}>
               <View style={styles.countRow}>
                 <Text style={[styles.countKey, { color: colors.mutedForeground }]}>FILES</Text>
-                <Text style={[styles.countSep]}>{' = '}</Text>
+                <Text style={styles.countSep}>{' = '}</Text>
                 <Text style={[styles.countVal, { color: colors.foreground }]}>{filtered.length}</Text>
                 <Text style={[styles.countKey, { color: colors.mutedForeground, marginLeft: 16 }]}>TOTAL</Text>
-                <Text style={[styles.countSep]}>{' = '}</Text>
+                <Text style={styles.countSep}>{' = '}</Text>
                 <Text style={[styles.countVal, { color: accentAmber }]}>
-                  {formatBytes(filtered.reduce((a, f) => a + f.size, 0))}
+                  {formatBytes(filteredTotalSize)}
                 </Text>
               </View>
               <Text style={[styles.countNote, { color: colors.mutedForeground }]}>
                 {realCount} real sizes · {Math.max(0, Math.min(filtered.length, 200) - realCount)} estimated
               </Text>
             </View>
-
-            {/* Empty state */}
-            {filtered.length === 0 && (
-              <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
-                <Text style={[styles.emptyText, { color: colors.success }]}>
-                  {filter === 'all' ? '[OK] NO LARGE FILES FOUND' : `[OK] NO ${filter.toUpperCase()} FILES`}
-                </Text>
-                <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
-                  {filter === 'all'
-                    ? 'No media files above the size threshold detected'
-                    : `No ${filter} files above threshold — try a different filter`
-                  }
-                </Text>
-              </View>
-            )}
-
-            {/* File list */}
-            {filtered.length > 0 && (
-              <View style={[styles.listPanel, bevel, { backgroundColor: colors.card }]}>
-                {filtered.map((file, idx) => (
-                  <Pressable
-                    key={file.id}
-                    style={[
-                      styles.fileRow,
-                      idx < filtered.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
-                      file.selected && { backgroundColor: colors.accent + '08' },
-                    ]}
-                    onPress={() => toggleFile(file.id)}
-                  >
-                    {/* Type icon */}
-                    <View style={[styles.fileIconBox, { borderColor: TYPE_COLORS[file.type] + '50' }]}>
-                      <Feather name={TYPE_ICONS[file.type]} size={14} color={TYPE_COLORS[file.type]} />
-                    </View>
-                    {/* Info */}
-                    <View style={styles.fileInfo}>
-                      <View style={styles.fileTopRow}>
-                        <Text style={[styles.fileName, { color: colors.foreground }]} numberOfLines={1}>
-                          {file.name}
-                        </Text>
-                        <Text style={[styles.fileSize, {
-                          color: file.selected ? colors.accent : TYPE_COLORS[file.type],
-                        }]}>
-                          {file.sizeIsReal ? '' : '~'}{formatBytes(file.size)}
-                        </Text>
-                      </View>
-                      <View style={styles.fileBottomRow}>
-                        <Text style={[styles.fileAge, { color: colors.mutedForeground }]}>
-                          {file.ageText}
-                        </Text>
-                        <Text style={[styles.fileDot, { color: colors.border }]}>{' · '}</Text>
-                        <Text style={[styles.fileReco, { color: colors.mutedForeground }]} numberOfLines={1}>
-                          {file.recommendation}
-                        </Text>
-                      </View>
-                    </View>
-                    {/* Checkbox */}
-                    <View style={[styles.checkbox, {
-                      backgroundColor: file.selected ? colors.accent : 'transparent',
-                      borderColor: file.selected ? colors.accent : colors.border,
-                    }]}>
-                      {file.selected && <Text style={styles.checkMark}>✓</Text>}
-                    </View>
-                  </Pressable>
-                ))}
-              </View>
-            )}
-          </Animated.View>
-        )}
-
-        {/* ── DONE ── */}
-        {phase === 'done' && (
-          <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] FILES PURGED'}</Text>
-              <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(bytesFreed)}</Text>
-              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>RECLAIMED</Text>
+          }
+          ListEmptyComponent={
+            <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
+              <Text style={[styles.emptyText, { color: colors.success }]}>
+                {filter === 'all' ? '[OK] NO LARGE FILES FOUND' : `[OK] NO ${filter.toUpperCase()} FILES`}
+              </Text>
+              <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
+                {filter === 'all'
+                  ? 'No media files above the size threshold detected'
+                  : `No ${filter} files above threshold — try a different filter`
+                }
+              </Text>
             </View>
-            <Pressable onPress={() => { setPhase('idle'); setFiles([]); }} style={styles.fullWidth}>
-              <View style={[styles.outlineBtn, {
-                borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
-                borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
-                borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-                backgroundColor: colors.card,
-              }]}>
-                <Text style={[styles.outlineBtnText, { color: colors.foreground }]}>{'>> SCAN AGAIN'}</Text>
+          }
+          ItemSeparatorComponent={() => <View style={{ height: 0, borderBottomWidth: 1, borderBottomColor: colors.border }} />}
+          style={[styles.flatList, bevel, { backgroundColor: colors.card }]}
+        />
+      ) : (
+        <ScrollView
+          contentContainerStyle={[styles.content, { paddingBottom: insets.bottom + 100 + webBottomPad }]}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* ── IDLE ── */}
+          {phase === 'idle' && (
+            <Animated.View entering={FadeIn} style={styles.center}>
+              <View style={[styles.idleIconBox, bevel, { backgroundColor: colors.card }]}>
+                <Feather name="hard-drive" size={44} color={accentAmber} />
               </View>
-            </Pressable>
-          </Animated.View>
-        )}
-      </ScrollView>
+              <Text style={[styles.idleTitle, { color: colors.foreground }]}>LARGE FILE SCANNER</Text>
+              <View style={[styles.infoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
+                <Text style={[styles.infoTitle, { color: accentAmber }]}>{'[SCAN METHOD]'}</Text>
+                <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                  {'[+] '} Scans all photos and videos via MediaLibrary
+                </Text>
+                <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                  {'[+] '} Real sizes measured for top 30 files
+                </Text>
+                <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                  {'[+] '} Age and safety recommendation per file
+                </Text>
+                <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                  {'[i] '} Remaining sizes estimated from dimensions
+                </Text>
+              </View>
+              <Pressable onPress={startScan} style={styles.fullWidth} accessibilityLabel="Start large file scan" accessibilityRole="button">
+                <View style={[styles.primaryBtn, {
+                  backgroundColor: accentAmber,
+                  borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
+                  borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
+                  borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+                }]}>
+                  <Feather name="search" size={16} color="#000" />
+                  <Text style={[styles.primaryBtnText, { color: '#000' }]}>{'>> SCAN FILES'}</Text>
+                </View>
+              </Pressable>
+            </Animated.View>
+          )}
+
+          {/* ── SCANNING ── */}
+          {phase === 'scanning' && (
+            <Animated.View entering={FadeIn} style={styles.center}>
+              <View style={[styles.scanBox, bevel, { backgroundColor: colors.card }]}>
+                <Text style={[styles.scanTitle, { color: accentAmber }]}>{'[SCANNING...]'}</Text>
+                <Text style={[styles.scanPct, { color: accentAmber }]}>
+                  {String(scanProgress).padStart(3, '0')}%
+                </Text>
+                <SegBar value={scanProgress / 100} color={accentAmber} />
+                <Text style={[styles.scanStatus, { color: colors.mutedForeground }]}>{'> '}{scanStatus}</Text>
+              </View>
+            </Animated.View>
+          )}
+
+          {/* ── ERROR ── */}
+          {phase === 'error' && (
+            <Animated.View entering={FadeIn} style={styles.center}>
+              <View style={[styles.errorBox, bevel, { backgroundColor: colors.card }]}>
+                <Text style={[styles.errorTitle, { color: accentAmber }]}>{'[SCAN FAILED]'}</Text>
+                <Text style={[styles.errorMsg, { color: colors.mutedForeground }]}>
+                  {'> '}{scanError ?? 'UNEXPECTED ERROR — CHECK PERMISSIONS'}
+                </Text>
+                <Pressable onPress={() => { setScanError(null); setPhase('idle'); }} style={styles.fullWidth}>
+                  <View style={[styles.retryBtn, {
+                    backgroundColor: accentAmber,
+                    borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
+                    borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
+                    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+                  }]}>
+                    <Feather name="refresh-cw" size={14} color="#000" />
+                    <Text style={[styles.retryBtnText, { color: '#000' }]}>{'>> TRY AGAIN'}</Text>
+                  </View>
+                </Pressable>
+              </View>
+            </Animated.View>
+          )}
+
+          {/* ── VERIFYING ── */}
+          {phase === 'verifying' && (
+            <Animated.View entering={FadeIn} style={styles.center}>
+              <VerifyingPanel color={accentAmber} />
+            </Animated.View>
+          )}
+
+          {/* ── DONE ── */}
+          {phase === 'done' && (
+            <Animated.View entering={FadeIn} style={styles.center}>
+              <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
+                <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] FILES PURGED'}</Text>
+                <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(bytesFreed)}</Text>
+                <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>RECLAIMED</Text>
+              </View>
+              <Pressable onPress={() => { setPhase('idle'); setFiles([]); }} style={styles.fullWidth}>
+                <View style={[styles.outlineBtn, {
+                  borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
+                  borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
+                  borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+                  backgroundColor: colors.card,
+                }]}>
+                  <Text style={[styles.outlineBtnText, { color: colors.foreground }]}>{'>> SCAN AGAIN'}</Text>
+                </View>
+              </Pressable>
+            </Animated.View>
+          )}
+        </ScrollView>
+      )}
 
       {/* ── Footer ── */}
       {(phase === 'results' || phase === 'cleaning') && selected.length > 0 && (
@@ -609,6 +612,8 @@ const styles = StyleSheet.create({
   emptyText: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
   emptyDesc: { fontSize: 11, fontFamily: 'Inter_400Regular', textAlign: 'center', lineHeight: 18 },
 
+  flatList: { overflow: 'hidden', marginHorizontal: 0 },
+  flatContent: { paddingHorizontal: 16, paddingTop: 16, gap: 0 },
   listPanel: { overflow: 'hidden' },
   fileRow: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
   fileIconBox: { width: 34, height: 34, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },

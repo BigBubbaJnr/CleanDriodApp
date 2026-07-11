@@ -104,6 +104,7 @@ export async function getRealFileSize(uri: string): Promise<number | null> {
 interface CleanerContextType {
   storageStats: StorageStats | null;
   isLoadingStats: boolean;
+  isStatsError: boolean;
   mediaBreakdown: MediaBreakdown | null;
   snapshots: ScanSnapshot[];
   history: CleanHistoryItem[];
@@ -152,6 +153,7 @@ async function getOwnCacheSize(): Promise<number> {
 export function CleanerProvider({ children }: { children: React.ReactNode }) {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
+  const [isStatsError, setIsStatsError] = useState(false);
   const [mediaBreakdown, setMediaBreakdown] = useState<MediaBreakdown | null>(null);
   const [snapshots, setSnapshots] = useState<ScanSnapshot[]>([]);
   const [journal, setJournal] = useState<ScanJournalEntry[]>([]);
@@ -162,6 +164,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
 
   const refreshStats = useCallback(async () => {
     setIsLoadingStats(true);
+    setIsStatsError(false);
     try {
       const [freeSpace, totalSpace, appCacheSize] = await Promise.all([
         FileSystem.getFreeDiskStorageAsync(),
@@ -170,9 +173,9 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       ]);
       setStorageStats({ totalSpace, usedSpace: totalSpace - freeSpace, freeSpace, appCacheSize });
     } catch {
-      const total = 64 * 1024 * 1024 * 1024;
-      const used = 42 * 1024 * 1024 * 1024;
-      setStorageStats({ totalSpace: total, usedSpace: used, freeSpace: total - used, appCacheSize: 0 });
+      // Android filesystem APIs unavailable (e.g. web preview, restricted sandbox).
+      // Leave storageStats as null — never fabricate storage numbers.
+      setIsStatsError(true);
     } finally {
       setIsLoadingStats(false);
     }
@@ -382,12 +385,12 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const contextValue = useMemo(() => ({
-    storageStats, isLoadingStats, mediaBreakdown, snapshots,
+    storageStats, isLoadingStats, isStatsError, mediaBreakdown, snapshots,
     history, totalBytesFreed, scheduleSettings, rootEnabled,
     journal, refreshStats, scanMediaLibrary, addScanSnapshot,
     addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
   }), [
-    storageStats, isLoadingStats, mediaBreakdown, snapshots,
+    storageStats, isLoadingStats, isStatsError, mediaBreakdown, snapshots,
     history, totalBytesFreed, scheduleSettings, rootEnabled,
     journal, refreshStats, scanMediaLibrary, addScanSnapshot,
     addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,

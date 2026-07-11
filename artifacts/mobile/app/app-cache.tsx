@@ -224,6 +224,17 @@ export default function AppCacheScreen() {
               </View>
             </View>
 
+            {/* Android Limitation Explainer */}
+            <View style={[styles.limitBox, { borderColor: colors.primary + '50', backgroundColor: colors.muted }]}>
+              <Text style={[styles.limitTitle, { color: colors.primary }]}>{'[WHY ANDROID LIMITS THIS]'}</Text>
+              <Text style={[styles.limitText, { color: colors.mutedForeground }]}>
+                {'Android protects each app\'s private storage. Only the operating system itself can report exact cache sizes or clear them directly. Third-party apps like CleanDroid cannot read or delete another app\'s cache without the user\'s explicit action in Settings.'}
+              </Text>
+              <Text style={[styles.limitText, { color: colors.mutedForeground, marginTop: 6 }]}>
+                {'Smart Sweep works with this constraint — it opens the correct Settings screen for each app so you can clear the real amount in one tap.'}
+              </Text>
+            </View>
+
             {/* Step 2 */}
             <View style={[styles.stepPanel, bevel, { backgroundColor: colors.card }]}>
               <View style={[styles.stepBadge, { backgroundColor: colors.accent }]}>
@@ -232,11 +243,11 @@ export default function AppCacheScreen() {
               <View style={styles.stepBody}>
                 <Text style={[styles.stepTitle, { color: colors.accent }]}>SMART SWEEP</Text>
                 <Text style={[styles.stepDesc, { color: colors.mutedForeground }]}>
-                  Opens each app's cache settings automatically. Just clear and return — we open the next.
+                  Opens each app's Settings page automatically. Tap "Storage" → "Clear Cache", then return here — the next app opens.
                 </Text>
                 <View style={[styles.infoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
                   <Text style={[styles.infoText, { color: colors.mutedForeground }]}>
-                    {'[!] '} Android requires one "Clear Cache" tap per app. Smart Sweep removes all back-and-forth.
+                    {'[i] '} Android requires one "Clear Cache" tap per app. Smart Sweep removes all back-and-forth navigation.
                   </Text>
                 </View>
               </View>
@@ -436,6 +447,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1,
   },
   backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  limitBox: { borderWidth: 1, padding: 12, gap: 0 },
+  limitTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 8 },
+  limitText: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3, lineHeight: 16 },
   estimatedNote: { padding: 10, marginBottom: 6, borderWidth: 1 },
   estimatedNoteText: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3, lineHeight: 15 },
   headerSub: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 2 },
