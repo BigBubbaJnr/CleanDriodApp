@@ -11,7 +11,7 @@
  * representatives (up to 20 groups × 1 URI call each).
  * All other sizes are estimated from dimensions.
  */
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -25,6 +25,7 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, getRealFileSize } from '@/context/CleanerContext';
+import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, getAgeText, formatDateShort } from '@/utils/format';
 import SegBar from '@/components/SegBar';
@@ -90,9 +91,10 @@ interface DuplicateGroup {
 export default function DuplicateFinderScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
 
-  const [phase, setPhase] = useState<'idle' | 'scanning' | 'results' | 'cleaning' | 'done'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done'>('idle');
+  const scanStartRef = useRef<number>(0);
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [scanProgress, setScanProgress] = useState(0);
   const [scanLog, setScanLog] = useState<string[]>([]);
@@ -106,6 +108,7 @@ export default function DuplicateFinderScreen() {
   const addLog = useCallback((msg: string) => setScanLog(prev => [...prev, `> ${msg}`]), []);
 
   const startScan = useCallback(async () => {
+    scanStartRef.current = Date.now();
     setPhase('scanning');
     setScanProgress(0);
     setScanLog([]);
@@ -273,6 +276,8 @@ export default function DuplicateFinderScreen() {
     addLog(`found ${topGroups.length} duplicate group${topGroups.length !== 1 ? 's' : ''}`);
     await new Promise(r => setTimeout(r, 200));
     setGroups(topGroups);
+    setPhase('verifying');
+    await new Promise(r => setTimeout(r, 1200));
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [addLog]);
@@ -323,6 +328,16 @@ export default function DuplicateFinderScreen() {
         label: `Duplicate Finder — ${itemsRemoved} file${itemsRemoved !== 1 ? 's' : ''} removed`,
       });
     }
+    await addJournalEntry({
+      timestamp: Date.now(),
+      tool: 'duplicates',
+      durationMs: Date.now() - scanStartRef.current,
+      itemsFound: groups.length,
+      itemsCleaned: itemsRemoved,
+      bytesFound: totalWasted,
+      bytesRecovered: bytesActuallyFreed,
+      totalStorageBytes: storageStats?.totalSpace ?? 0,
+    });
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
@@ -396,6 +411,13 @@ export default function DuplicateFinderScreen() {
               <SegBar value={scanProgress / 100} color={accentGreen} />
             </View>
             <TerminalLog lines={scanLog} />
+          </Animated.View>
+        )}
+
+        {/* ── VERIFYING ── */}
+        {phase === 'verifying' && (
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <VerifyingPanel color={accentGreen} />
           </Animated.View>
         )}
 

@@ -10,7 +10,7 @@
 import React, { useMemo } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
-import { useCleaner, CleanHistoryItem } from '@/context/CleanerContext';
+import { useCleaner, CleanHistoryItem, ScanJournalEntry } from '@/context/CleanerContext';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, formatAbsoluteDate } from '@/utils/format';
 import { Feather } from '@expo/vector-icons';
@@ -83,12 +83,44 @@ function computeWeeklyTrend(history: CleanHistoryItem[]): {
   return { thisWeek, lastWeek, trend };
 }
 
+// ── Journal helpers ──────────────────────────────────────────────────────────
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  const s = Math.round(ms / 1000);
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  const rem = s % 60;
+  return rem > 0 ? `${m}m ${rem}s` : `${m}m`;
+}
+
+const JOURNAL_TOOL_LABELS: Record<string, string> = {
+  junk: 'JUNK CLEANER',
+  duplicates: 'DUPLICATE FINDER',
+  large_files: 'LARGE FILES',
+  screenshots: 'SCREENSHOT MGR',
+  cache: 'APP CACHE',
+  storage_intel: 'STORAGE INTEL',
+};
+
+const JOURNAL_TOOL_COLORS: Record<string, string> = {
+  junk: '#00E5CC',
+  duplicates: '#39FF14',
+  large_files: '#FFB800',
+  screenshots: '#39FF14',
+  cache: '#FF5500',
+  storage_intel: '#00E5CC',
+};
+
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+type _ScanJournalEntryUsed = ScanJournalEntry; // keep import live
+
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ScheduleScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { scheduleSettings, updateSchedule, history, totalBytesFreed } = useCleaner();
+  const { scheduleSettings, updateSchedule, history, totalBytesFreed, journal } = useCleaner();
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
@@ -272,29 +304,78 @@ export default function ScheduleScreen() {
             </View>
           )}
 
-          {/* Chronological log */}
+          {/* Scan Journal */}
           <Text style={[styles.sectionLabel, { color: colors.primary, marginTop: 8 }]}>
-            {'── EXECUTION LOG ────────────────────'}
+            {'── SCAN JOURNAL ─────────────────────'}
           </Text>
-          <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
-            {history.map((item, idx) => (
-              <View
-                key={item.id}
-                style={[styles.histRow, idx < history.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
-              >
-                <Feather name={TYPE_ICONS[item.type] ?? 'zap'} size={13} color={colors.primary} />
-                <View style={styles.histContent}>
-                  <Text style={[styles.histLabel, { color: colors.foreground }]} numberOfLines={1}>
-                    {item.label.toUpperCase()}
+          {journal.length > 0 ? (
+            <View style={{ gap: 8, marginBottom: 14 }}>
+              {journal.map(entry => (
+                <View key={entry.id} style={[styles.journalCard, bevel, { backgroundColor: colors.card }]}>
+                  {/* Header row */}
+                  <View style={styles.journalHeader}>
+                    <Text style={[styles.journalScanNum, { color: colors.primary }]}>
+                      {`SCAN #${String(entry.scanNumber).padStart(3, '0')}`}
+                    </Text>
+                    <Text style={[styles.journalTool, { color: JOURNAL_TOOL_COLORS[entry.tool] ?? colors.foreground }]}>
+                      {JOURNAL_TOOL_LABELS[entry.tool] ?? entry.tool.toUpperCase()}
+                    </Text>
+                  </View>
+                  <Text style={[styles.journalDate, { color: colors.mutedForeground }]}>
+                    {formatAbsoluteDate(new Date(entry.timestamp).toISOString())}
                   </Text>
-                  <Text style={[styles.histDate, { color: colors.mutedForeground }]}>{formatAbsoluteDate(item.date)}</Text>
+                  {/* Stats grid */}
+                  <View style={styles.journalGrid}>
+                    <View style={styles.journalCell}>
+                      <Text style={[styles.journalKey, { color: colors.mutedForeground }]}>STORAGE</Text>
+                      <Text style={[styles.journalVal, { color: colors.foreground }]}>
+                        {entry.totalStorageBytes > 0 ? formatBytes(entry.totalStorageBytes) : '—'}
+                      </Text>
+                    </View>
+                    <View style={styles.journalCell}>
+                      <Text style={[styles.journalKey, { color: colors.mutedForeground }]}>RECOVERED</Text>
+                      <Text style={[styles.journalVal, { color: colors.primary }]}>
+                        {entry.bytesRecovered > 0 ? `~${formatBytes(entry.bytesRecovered)}` : '—'}
+                      </Text>
+                    </View>
+                    <View style={styles.journalCell}>
+                      <Text style={[styles.journalKey, { color: colors.mutedForeground }]}>CLEANED</Text>
+                      <Text style={[styles.journalVal, { color: colors.foreground }]}>
+                        {entry.itemsCleaned > 0 ? `${entry.itemsCleaned} FILES` : '—'}
+                      </Text>
+                    </View>
+                    <View style={styles.journalCell}>
+                      <Text style={[styles.journalKey, { color: colors.mutedForeground }]}>DURATION</Text>
+                      <Text style={[styles.journalVal, { color: colors.foreground }]}>
+                        {formatDuration(entry.durationMs)}
+                      </Text>
+                    </View>
+                  </View>
                 </View>
-                <Text style={[styles.histSize, { color: colors.accent }]}>
-                  {item.bytesFreed > 0 ? '+' + formatBytes(item.bytesFreed) : '—'}
-                </Text>
-              </View>
-            ))}
-          </View>
+              ))}
+            </View>
+          ) : history.length > 0 ? (
+            /* Legacy fallback — shows old history items until journal is populated */
+            <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
+              {history.map((item, idx) => (
+                <View
+                  key={item.id}
+                  style={[styles.histRow, idx < history.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
+                >
+                  <Feather name={TYPE_ICONS[item.type] ?? 'zap'} size={13} color={colors.primary} />
+                  <View style={styles.histContent}>
+                    <Text style={[styles.histLabel, { color: colors.foreground }]} numberOfLines={1}>
+                      {item.label.toUpperCase()}
+                    </Text>
+                    <Text style={[styles.histDate, { color: colors.mutedForeground }]}>{formatAbsoluteDate(item.date)}</Text>
+                  </View>
+                  <Text style={[styles.histSize, { color: colors.accent }]}>
+                    {item.bytesFreed > 0 ? '+' + formatBytes(item.bytesFreed) : '—'}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
         </>
       ) : (
         <View style={[styles.emptyBox, bevel, { backgroundColor: colors.card, marginTop: 20 }]}>
@@ -370,6 +451,19 @@ const styles = StyleSheet.create({
   histLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.5 },
   histDate: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginTop: 2 },
   histSize: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+
+  journalCard: {
+    padding: 14, gap: 8,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+  },
+  journalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  journalScanNum: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  journalTool: { fontSize: 10, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5 },
+  journalDate: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginTop: -4 },
+  journalGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginTop: 4 },
+  journalCell: { width: '47%', gap: 2 },
+  journalKey: { fontSize: 8, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5 },
+  journalVal: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
 
   emptyBox: {
     padding: 32, alignItems: 'center', gap: 10, marginBottom: 8,

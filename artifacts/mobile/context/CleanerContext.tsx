@@ -54,6 +54,27 @@ export interface ScanSnapshot {
   screenshotSize: number;
 }
 
+export interface ScanJournalEntry {
+  id: string;
+  /** Auto-assigned sequential scan number */
+  scanNumber: number;
+  /** Unix ms timestamp of the clean operation */
+  timestamp: number;
+  tool: 'junk' | 'duplicates' | 'large_files' | 'screenshots' | 'cache' | 'storage_intel';
+  /** Total ms from scan start to clean completion */
+  durationMs: number;
+  /** Number of items/groups found during scan */
+  itemsFound: number;
+  /** Number of items actually deleted */
+  itemsCleaned: number;
+  /** Total bytes of all found items */
+  bytesFound: number;
+  /** Bytes actually freed */
+  bytesRecovered: number;
+  /** Device total storage at time of scan */
+  totalStorageBytes: number;
+}
+
 /** Estimate image bytes from dimensions (JPEG ~20:1 compression from raw RGB) */
 export function estimateImageSize(width: number, height: number): number {
   return Math.round(width * height * 0.2);
@@ -95,6 +116,8 @@ interface CleanerContextType {
   ) => Promise<MediaBreakdown | null>;
   addScanSnapshot: (snap: Omit<ScanSnapshot, 'id'>) => Promise<void>;
   addHistoryItem: (item: Omit<CleanHistoryItem, 'id'>) => Promise<void>;
+  journal: ScanJournalEntry[];
+  addJournalEntry: (entry: Omit<ScanJournalEntry, 'id' | 'scanNumber'>) => Promise<void>;
   updateSchedule: (settings: Partial<ScheduleSettings>) => Promise<void>;
   setRootEnabled: (enabled: boolean) => Promise<void>;
 }
@@ -107,6 +130,7 @@ const STORAGE_KEYS = {
   ROOT: 'cleandroid_root',
   TOTAL_FREED: 'cleandroid_total_freed',
   SNAPSHOTS: 'cleandroid_snapshots',
+  JOURNAL: 'cleandroid_journal',
 };
 
 const DEFAULT_SCHEDULE: ScheduleSettings = {
@@ -129,6 +153,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   const [isLoadingStats, setIsLoadingStats] = useState(true);
   const [mediaBreakdown, setMediaBreakdown] = useState<MediaBreakdown | null>(null);
   const [snapshots, setSnapshots] = useState<ScanSnapshot[]>([]);
+  const [journal, setJournal] = useState<ScanJournalEntry[]>([]);
   const [history, setHistory] = useState<CleanHistoryItem[]>([]);
   const [totalBytesFreed, setTotalBytesFreed] = useState(0);
   const [scheduleSettings, setScheduleSettings] = useState<ScheduleSettings>(DEFAULT_SCHEDULE);
@@ -287,20 +312,35 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const addJournalEntry = useCallback(async (entry: Omit<ScanJournalEntry, 'id' | 'scanNumber'>) => {
+    setJournal(prev => {
+      const newEntry: ScanJournalEntry = {
+        ...entry,
+        id: Date.now().toString() + Math.random().toString(36).slice(2, 7),
+        scanNumber: prev.length + 1,
+      };
+      const updated = [newEntry, ...prev].slice(0, 100);
+      AsyncStorage.setItem(STORAGE_KEYS.JOURNAL, JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
   const loadPersisted = useCallback(async () => {
     try {
-      const [histRaw, schedRaw, rootRaw, freedRaw, snapsRaw] = await Promise.all([
+      const [histRaw, schedRaw, rootRaw, freedRaw, snapsRaw, journalRaw] = await Promise.all([
         AsyncStorage.getItem(STORAGE_KEYS.HISTORY),
         AsyncStorage.getItem(STORAGE_KEYS.SCHEDULE),
         AsyncStorage.getItem(STORAGE_KEYS.ROOT),
         AsyncStorage.getItem(STORAGE_KEYS.TOTAL_FREED),
         AsyncStorage.getItem(STORAGE_KEYS.SNAPSHOTS),
+        AsyncStorage.getItem(STORAGE_KEYS.JOURNAL),
       ]);
       if (histRaw) setHistory(JSON.parse(histRaw));
       if (schedRaw) setScheduleSettings(JSON.parse(schedRaw));
       if (rootRaw) setRootEnabledState(rootRaw === 'true');
       if (freedRaw) setTotalBytesFreed(Number(freedRaw));
       if (snapsRaw) setSnapshots(JSON.parse(snapsRaw));
+      if (journalRaw) setJournal(JSON.parse(journalRaw));
     } catch {}
   }, []);
 
@@ -344,8 +384,8 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
     <CleanerContext.Provider value={{
       storageStats, isLoadingStats, mediaBreakdown, snapshots,
       history, totalBytesFreed, scheduleSettings, rootEnabled,
-      refreshStats, scanMediaLibrary, addScanSnapshot,
-      addHistoryItem, updateSchedule, setRootEnabled,
+      journal, refreshStats, scanMediaLibrary, addScanSnapshot,
+      addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
     }}>
       {children}
     </CleanerContext.Provider>

@@ -8,7 +8,7 @@
  *
  * Per-file info shown: name, size (real/est), type, age, recommendation.
  */
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -21,6 +21,7 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, estimateVideoSize, getRealFileSize } from '@/context/CleanerContext';
+import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, getAgeText } from '@/utils/format';
 import SegBar from '@/components/SegBar';
@@ -93,9 +94,10 @@ const FILTERS: { key: FilterType; label: string }[] = [
 export default function LargeFilesScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
 
-  const [phase, setPhase] = useState<'idle' | 'scanning' | 'results' | 'cleaning' | 'done'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done'>('idle');
+  const scanStartRef = useRef<number>(0);
   const [files, setFiles] = useState<LargeFile[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
   const [scanProgress, setScanProgress] = useState(0);
@@ -108,6 +110,7 @@ export default function LargeFilesScreen() {
   const bevel = useBevel();
 
   const startScan = useCallback(async () => {
+    scanStartRef.current = Date.now();
     setPhase('scanning');
     setScanProgress(0);
     setScanStatus('INIT...');
@@ -218,6 +221,8 @@ export default function LargeFilesScreen() {
 
     await new Promise(r => setTimeout(r, 200));
     setFiles(top200);
+    setPhase('verifying');
+    await new Promise(r => setTimeout(r, 1200));
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, []);
@@ -256,6 +261,16 @@ export default function LargeFilesScreen() {
         label: `Large Files — ${itemsRemoved} file${itemsRemoved !== 1 ? 's' : ''} removed`,
       });
     }
+    await addJournalEntry({
+      timestamp: Date.now(),
+      tool: 'large_files',
+      durationMs: Date.now() - scanStartRef.current,
+      itemsFound: files.length,
+      itemsCleaned: itemsRemoved,
+      bytesFound: files.reduce((acc, f) => acc + f.size, 0),
+      bytesRecovered: bytesActuallyFreed,
+      totalStorageBytes: storageStats?.totalSpace ?? 0,
+    });
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
@@ -361,6 +376,13 @@ export default function LargeFilesScreen() {
               <SegBar value={scanProgress / 100} color={accentAmber} />
               <Text style={[styles.scanStatus, { color: colors.mutedForeground }]}>{'> '}{scanStatus}</Text>
             </View>
+          </Animated.View>
+        )}
+
+        {/* ── VERIFYING ── */}
+        {phase === 'verifying' && (
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <VerifyingPanel color={accentAmber} />
           </Animated.View>
         )}
 

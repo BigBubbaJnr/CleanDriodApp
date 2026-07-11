@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Image,
@@ -12,6 +12,7 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
+import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, formatDateShort } from '@/utils/format';
 import { Feather } from '@expo/vector-icons';
@@ -40,9 +41,10 @@ function estimateScreenshotSize(w: number, h: number): number {
 export default function ScreenshotManagerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
 
-  const [phase, setPhase] = useState<'idle' | 'loading' | 'results' | 'deleting' | 'done'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'loading' | 'verifying' | 'results' | 'deleting' | 'done'>('idle');
+  const scanStartRef = useRef<number>(0);
   const [screenshots, setScreenshots] = useState<ScreenshotItem[]>([]);
   const [loadStatus, setLoadStatus] = useState('');
   const [freedBytes, setFreedBytes] = useState(0);
@@ -51,6 +53,7 @@ export default function ScreenshotManagerScreen() {
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
   const loadScreenshots = useCallback(async () => {
+    scanStartRef.current = Date.now();
     setPhase('loading');
     setLoadStatus('REQUESTING MEDIA ACCESS...');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
@@ -111,6 +114,8 @@ export default function ScreenshotManagerScreen() {
     items.sort((a, b) => b.creationTime - a.creationTime);
 
     setScreenshots(items);
+    setPhase('verifying');
+    await new Promise(r => setTimeout(r, 1200));
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, []);
@@ -147,6 +152,16 @@ export default function ScreenshotManagerScreen() {
       bytesFreed: selectedSize,
       type: 'screenshots',
       label: `Screenshot Manager — ${selected.length} screenshot${selected.length !== 1 ? 's' : ''} removed`,
+    });
+    await addJournalEntry({
+      timestamp: Date.now(),
+      tool: 'screenshots',
+      durationMs: Date.now() - scanStartRef.current,
+      itemsFound: screenshots.length,
+      itemsCleaned: selected.length,
+      bytesFound: totalSize,
+      bytesRecovered: selectedSize,
+      totalStorageBytes: storageStats?.totalSpace ?? 0,
     });
     setScreenshots(prev => prev.filter(s => !s.selected));
     setPhase('done');
@@ -205,6 +220,13 @@ export default function ScreenshotManagerScreen() {
               <ActivityIndicator color={colors.success} />
               <Text style={[styles.loadStatus, { color: colors.mutedForeground }]}>{'> '}{loadStatus}</Text>
             </View>
+          </Animated.View>
+        )}
+
+        {/* ── VERIFYING ── */}
+        {phase === 'verifying' && (
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <VerifyingPanel color={colors.success} />
           </Animated.View>
         )}
 

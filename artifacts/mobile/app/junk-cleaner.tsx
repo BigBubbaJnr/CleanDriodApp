@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -11,6 +11,7 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, estimateVideoSize } from '@/context/CleanerContext';
+import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes } from '@/utils/format';
 import SegBar from '@/components/SegBar';
@@ -51,9 +52,10 @@ const CAT_ICONS: Record<JunkCategory, keyof typeof Feather.glyphMap> = {
 export default function JunkCleanerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
 
-  const [phase, setPhase] = useState<'idle' | 'scanning' | 'results' | 'cleaning' | 'done'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done'>('idle');
+  const scanStartRef = useRef<number>(0);
   const [items, setItems] = useState<JunkItem[]>([]);
   const [scanProgress, setScanProgress] = useState(0);
   const [scanLog, setScanLog] = useState<string[]>([]);
@@ -67,6 +69,7 @@ export default function JunkCleanerScreen() {
   }, []);
 
   const startScan = useCallback(async () => {
+    scanStartRef.current = Date.now();
     setPhase('scanning');
     setScanProgress(0);
     setScanLog([]);
@@ -223,6 +226,8 @@ export default function JunkCleanerScreen() {
     await new Promise(r => setTimeout(r, 300));
 
     setItems(deduped);
+    setPhase('verifying');
+    await new Promise(r => setTimeout(r, 1200));
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [addLog]);
@@ -277,6 +282,16 @@ export default function JunkCleanerScreen() {
         label: `Junk Cleaner — ${itemsActuallyRemoved} item${itemsActuallyRemoved !== 1 ? 's' : ''} removed`,
       });
     }
+    await addJournalEntry({
+      timestamp: Date.now(),
+      tool: 'junk',
+      durationMs: Date.now() - scanStartRef.current,
+      itemsFound: items.length,
+      itemsCleaned: itemsActuallyRemoved,
+      bytesFound: totalSize,
+      bytesRecovered: bytesActuallyFreed,
+      totalStorageBytes: storageStats?.totalSpace ?? 0,
+    });
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
@@ -351,6 +366,13 @@ export default function JunkCleanerScreen() {
               <SegBar value={scanProgress / 100} color={colors.primary} />
             </View>
             <TerminalLog lines={scanLog} />
+          </Animated.View>
+        )}
+
+        {/* ── VERIFYING ── */}
+        {phase === 'verifying' && (
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <VerifyingPanel color={colors.primary} />
           </Animated.View>
         )}
 
