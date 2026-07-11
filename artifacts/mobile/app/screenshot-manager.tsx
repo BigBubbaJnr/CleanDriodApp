@@ -43,8 +43,9 @@ export default function ScreenshotManagerScreen() {
   const insets = useSafeAreaInsets();
   const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
 
-  const [phase, setPhase] = useState<'idle' | 'loading' | 'verifying' | 'results' | 'deleting' | 'done'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'loading' | 'verifying' | 'results' | 'deleting' | 'done' | 'error'>('idle');
   const scanStartRef = useRef<number>(0);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [screenshots, setScreenshots] = useState<ScreenshotItem[]>([]);
   const [loadStatus, setLoadStatus] = useState('');
   const [freedBytes, setFreedBytes] = useState(0);
@@ -54,9 +55,11 @@ export default function ScreenshotManagerScreen() {
 
   const loadScreenshots = useCallback(async () => {
     scanStartRef.current = Date.now();
+    setScanError(null);
     setPhase('loading');
     setLoadStatus('REQUESTING MEDIA ACCESS...');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
 
     if (Platform.OS === 'web') {
       setLoadStatus('[web] media library unavailable in browser');
@@ -118,6 +121,10 @@ export default function ScreenshotManagerScreen() {
     await new Promise(r => setTimeout(r, 1200));
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : 'UNEXPECTED ERROR DURING SCAN');
+      setPhase('error');
+    }
   }, []);
 
   useEffect(() => { loadScreenshots(); }, [loadScreenshots]);
@@ -219,6 +226,29 @@ export default function ScreenshotManagerScreen() {
               <Text style={[styles.loadTitle, { color: colors.success }]}>{'[LOADING...]'}</Text>
               <ActivityIndicator color={colors.success} />
               <Text style={[styles.loadStatus, { color: colors.mutedForeground }]}>{'> '}{loadStatus}</Text>
+            </View>
+          </Animated.View>
+        )}
+
+        {/* ── ERROR ── */}
+        {phase === 'error' && (
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <View style={[styles.errorBox, bevel, { backgroundColor: colors.card }]}>
+              <Text style={[styles.errorTitle, { color: colors.success }]}>{'[SCAN FAILED]'}</Text>
+              <Text style={[styles.errorMsg, { color: colors.mutedForeground }]}>
+                {'> '}{scanError ?? 'UNEXPECTED ERROR — CHECK PERMISSIONS'}
+              </Text>
+              <Pressable onPress={() => { setScanError(null); setPhase('idle'); }} style={styles.fullWidth}>
+                <View style={[styles.retryBtn, {
+                  backgroundColor: colors.success,
+                  borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
+                  borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
+                  borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+                }]}>
+                  <Feather name="refresh-cw" size={14} color="#000" />
+                  <Text style={[styles.retryBtnText, { color: '#000' }]}>{'>> TRY AGAIN'}</Text>
+                </View>
+              </Pressable>
             </View>
           </Animated.View>
         )}
@@ -376,6 +406,11 @@ const styles = StyleSheet.create({
   content: { padding: 16, gap: 10 },
   center: { alignItems: 'center', paddingTop: 40, gap: 16 },
   fullWidth: { width: '100%' },
+  errorBox: { padding: 20, gap: 12, width: '100%' },
+  errorTitle: { fontFamily: 'Inter_700Bold', fontSize: 14, letterSpacing: 2 },
+  errorMsg: { fontFamily: 'Inter_400Regular', fontSize: 11, letterSpacing: 0.5, lineHeight: 16 },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14 },
+  retryBtnText: { fontFamily: 'Inter_700Bold', fontSize: 13, letterSpacing: 2 },
 
   loadBox: { width: '100%', padding: 24, gap: 14, alignItems: 'center' },
   loadTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2 },

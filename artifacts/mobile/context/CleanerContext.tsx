@@ -1,4 +1,4 @@
-import React, { createContext, useCallback, useContext, useEffect, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
@@ -380,13 +380,20 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(STORAGE_KEYS.ROOT, String(enabled));
   }, []);
 
+  const contextValue = useMemo(() => ({
+    storageStats, isLoadingStats, mediaBreakdown, snapshots,
+    history, totalBytesFreed, scheduleSettings, rootEnabled,
+    journal, refreshStats, scanMediaLibrary, addScanSnapshot,
+    addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
+  }), [
+    storageStats, isLoadingStats, mediaBreakdown, snapshots,
+    history, totalBytesFreed, scheduleSettings, rootEnabled,
+    journal, refreshStats, scanMediaLibrary, addScanSnapshot,
+    addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
+  ]);
+
   return (
-    <CleanerContext.Provider value={{
-      storageStats, isLoadingStats, mediaBreakdown, snapshots,
-      history, totalBytesFreed, scheduleSettings, rootEnabled,
-      journal, refreshStats, scanMediaLibrary, addScanSnapshot,
-      addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
-    }}>
+    <CleanerContext.Provider value={contextValue}>
       {children}
     </CleanerContext.Provider>
   );

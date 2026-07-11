@@ -93,8 +93,9 @@ export default function DuplicateFinderScreen() {
   const insets = useSafeAreaInsets();
   const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
 
-  const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done'>('idle');
+  const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done' | 'error'>('idle');
   const scanStartRef = useRef<number>(0);
+  const [scanError, setScanError] = useState<string | null>(null);
   const [groups, setGroups] = useState<DuplicateGroup[]>([]);
   const [scanProgress, setScanProgress] = useState(0);
   const [scanLog, setScanLog] = useState<string[]>([]);
@@ -109,10 +110,12 @@ export default function DuplicateFinderScreen() {
 
   const startScan = useCallback(async () => {
     scanStartRef.current = Date.now();
+    setScanError(null);
     setPhase('scanning');
     setScanProgress(0);
     setScanLog([]);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    try {
 
     if (Platform.OS === 'web') {
       addLog('[web] media library unavailable in browser');
@@ -280,6 +283,10 @@ export default function DuplicateFinderScreen() {
     await new Promise(r => setTimeout(r, 1200));
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e) {
+      setScanError(e instanceof Error ? e.message : 'UNEXPECTED ERROR DURING SCAN');
+      setPhase('error');
+    }
   }, [addLog]);
 
   const toggleInGroup = (groupId: string, idx: number) =>
@@ -411,6 +418,29 @@ export default function DuplicateFinderScreen() {
               <SegBar value={scanProgress / 100} color={accentGreen} />
             </View>
             <TerminalLog lines={scanLog} />
+          </Animated.View>
+        )}
+
+        {/* ── ERROR ── */}
+        {phase === 'error' && (
+          <Animated.View entering={FadeIn} style={styles.center}>
+            <View style={[styles.errorBox, bevel, { backgroundColor: colors.card }]}>
+              <Text style={[styles.errorTitle, { color: accentGreen }]}>{'[SCAN FAILED]'}</Text>
+              <Text style={[styles.errorMsg, { color: colors.mutedForeground }]}>
+                {'> '}{scanError ?? 'UNEXPECTED ERROR — CHECK PERMISSIONS'}
+              </Text>
+              <Pressable onPress={() => { setScanError(null); setPhase('idle'); }} style={styles.fullWidth}>
+                <View style={[styles.retryBtn, {
+                  backgroundColor: accentGreen,
+                  borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
+                  borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
+                  borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+                }]}>
+                  <Feather name="refresh-cw" size={14} color="#000" />
+                  <Text style={[styles.retryBtnText, { color: '#000' }]}>{'>> TRY AGAIN'}</Text>
+                </View>
+              </Pressable>
+            </View>
           </Animated.View>
         )}
 
@@ -609,6 +639,11 @@ const styles = StyleSheet.create({
   content: { padding: 16, gap: 12 },
   center: { alignItems: 'center', paddingTop: 32, gap: 16 },
   fullWidth: { width: '100%' },
+  errorBox: { padding: 20, gap: 12, width: '100%' },
+  errorTitle: { fontFamily: 'Inter_700Bold', fontSize: 14, letterSpacing: 2 },
+  errorMsg: { fontFamily: 'Inter_400Regular', fontSize: 11, letterSpacing: 0.5, lineHeight: 16 },
+  retryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14 },
+  retryBtnText: { fontFamily: 'Inter_700Bold', fontSize: 13, letterSpacing: 2 },
 
   idleIconBox: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
   idleTitle: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
