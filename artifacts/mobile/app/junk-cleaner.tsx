@@ -14,6 +14,7 @@ import { useCleaner, estimateImageSize, estimateVideoSize } from '@/context/Clea
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes } from '@/utils/format';
+import { sleep } from '@/utils/sleep';
 import SegBar from '@/components/SegBar';
 import TerminalLog from '@/components/TerminalLog';
 import { Feather } from '@expo/vector-icons';
@@ -226,11 +227,11 @@ export default function JunkCleanerScreen() {
       return true;
     });
     addLog(`scan complete — ${deduped.length} unique item${deduped.length !== 1 ? 's' : ''} found`);
-    await new Promise(r => setTimeout(r, 300));
+    await sleep(300);
 
     setItems(deduped);
     setPhase('verifying');
-    await new Promise(r => setTimeout(r, 1200));
+    await sleep(1200);
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
@@ -279,7 +280,7 @@ export default function JunkCleanerScreen() {
       } catch {}
     }
 
-    await new Promise(r => setTimeout(r, 800));
+    await sleep(800);
     setBytesFreed(bytesActuallyFreed);
     if (bytesActuallyFreed > 0 || itemsActuallyRemoved > 0) {
       await addHistoryItem({

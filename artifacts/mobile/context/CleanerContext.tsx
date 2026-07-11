@@ -85,10 +85,11 @@ export function estimateVideoSize(durationSeconds: number): number {
   return Math.round(Math.max(1, durationSeconds) * 4_000_000 / 8);
 }
 
-/** Estimate audio bytes from duration (assumes ~128 kbps) */
-export function estimateAudioSize(durationSeconds: number): number {
+/** Estimate audio bytes from duration (assumes ~128 kbps) — internal use only */
+function estimateAudioSize(durationSeconds: number): number {
   return Math.round(Math.max(1, durationSeconds) * 128_000 / 8);
 }
+
 
 /** Try to get real file size from a local URI. Returns null on failure. */
 export async function getRealFileSize(uri: string): Promise<number | null> {

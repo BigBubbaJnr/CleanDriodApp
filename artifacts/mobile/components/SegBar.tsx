@@ -17,7 +17,7 @@ interface SegBarProps {
   height?: number;
 }
 
-export default function SegBar({ value, color, total = 20, height = 6 }: SegBarProps) {
+const SegBar = React.memo(function SegBar({ value, color, total = 20, height = 6 }: SegBarProps) {
   const colors = useColors();
   const filled = Math.max(0, Math.min(total, Math.round(value * total)));
   return (
@@ -30,4 +30,6 @@ export default function SegBar({ value, color, total = 20, height = 6 }: SegBarP
       ))}
     </View>
   );
-}
+});
+
+export default SegBar;

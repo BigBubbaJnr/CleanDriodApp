@@ -47,6 +47,16 @@ BASE_APPS list (12 hardcoded entries) now shows:
 All 6 tool screen back buttons: accessibilityLabel="Go back" accessibilityRole="button"
 3 main scan action buttons: accessibilityLabel + accessibilityRole="button"
 
+## Engineering Audit Pass (done this session)
+- Created `utils/sleep.ts` — centralises `await new Promise(r => setTimeout(r, ms))` pattern; all 5 tool screens now import it
+- Removed 10 unused packages: expo-background-fetch, expo-task-manager, expo-crypto, zod-validation-error, expo-blur, expo-linear-gradient, expo-image-picker, expo-location, @stardazed/streams-text-encoding, @ungap/structured-clone
+- `estimateAudioSize` made unexported (internal to CleanerContext) — was a dead export
+- `_ScanJournalEntryUsed` dummy type removed; `ScanJournalEntry` import changed to `import type`
+- `SegBar` and `TerminalLog` wrapped in `React.memo`
+- Schedule screen: Coming Soon banner added (`[!] BACKGROUND EXECUTION: V1.1`); toggle shows "PREFERENCES SAVED" / "CONFIGURED: WEEKLY" to be honest about current state
+- Created `README.md` — external docs with FAQ answers for "why are sizes estimated?" and "why can't you clean app caches?"
+- Created `CLEANDROID_PRINCIPLES.md` — 8 product principles; north star for all future decisions
+
 ## Outstanding (not yet done)
 - Background task registration (expo-background-fetch + expo-task-manager installed, task not registered)
 - Real app icon (all densities + adaptive icon for Android)

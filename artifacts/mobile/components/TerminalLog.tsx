@@ -12,7 +12,7 @@ interface TerminalLogProps {
   maxHeight?: number;
 }
 
-export default function TerminalLog({ lines, maxHeight = 140 }: TerminalLogProps) {
+const TerminalLog = React.memo(function TerminalLog({ lines, maxHeight = 140 }: TerminalLogProps) {
   const colors = useColors();
   const scrollRef = useRef<ScrollView>(null);
 
@@ -35,7 +35,9 @@ export default function TerminalLog({ lines, maxHeight = 140 }: TerminalLogProps
       ))}
     </ScrollView>
   );
-}
+});
+
+export default TerminalLog;
 
 const styles = StyleSheet.create({
   box: { borderWidth: 1 },

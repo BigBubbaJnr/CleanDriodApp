@@ -24,6 +24,7 @@ import { useCleaner, estimateImageSize, estimateVideoSize, getRealFileSize } fro
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, getAgeText } from '@/utils/format';
+import { sleep } from '@/utils/sleep';
 import SegBar from '@/components/SegBar';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -222,10 +223,10 @@ export default function LargeFilesScreen() {
     setScanProgress(100);
     setScanStatus(`found ${top200.length} large file${top200.length !== 1 ? 's' : ''}`);
 
-    await new Promise(r => setTimeout(r, 200));
+    await sleep(200);
     setFiles(top200);
     setPhase('verifying');
-    await new Promise(r => setTimeout(r, 1200));
+    await sleep(1200);
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
@@ -258,7 +259,7 @@ export default function LargeFilesScreen() {
       } catch {}
     }
 
-    await new Promise(r => setTimeout(r, 800));
+    await sleep(800);
     setBytesFreed(bytesActuallyFreed);
     if (bytesActuallyFreed > 0 || itemsRemoved > 0) {
       await addHistoryItem({

@@ -28,6 +28,7 @@ import { useCleaner, estimateImageSize, getRealFileSize } from '@/context/Cleane
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, getAgeText, formatDateShort } from '@/utils/format';
+import { sleep } from '@/utils/sleep';
 import SegBar from '@/components/SegBar';
 import TerminalLog from '@/components/TerminalLog';
 import { Feather } from '@expo/vector-icons';
@@ -277,10 +278,10 @@ export default function DuplicateFinderScreen() {
 
     setScanProgress(100);
     addLog(`found ${topGroups.length} duplicate group${topGroups.length !== 1 ? 's' : ''}`);
-    await new Promise(r => setTimeout(r, 200));
+    await sleep(200);
     setGroups(topGroups);
     setPhase('verifying');
-    await new Promise(r => setTimeout(r, 1200));
+    await sleep(1200);
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
@@ -325,7 +326,7 @@ export default function DuplicateFinderScreen() {
       } catch {}
     }
 
-    await new Promise(r => setTimeout(r, 800));
+    await sleep(800);
     setBytesFreed(bytesActuallyFreed);
     if (bytesActuallyFreed > 0 || itemsRemoved > 0) {
       await addHistoryItem({

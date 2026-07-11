@@ -10,7 +10,8 @@
 import React, { useMemo } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
-import { useCleaner, CleanHistoryItem, ScanJournalEntry } from '@/context/CleanerContext';
+import { useCleaner, CleanHistoryItem } from '@/context/CleanerContext';
+import type { ScanJournalEntry } from '@/context/CleanerContext';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, formatAbsoluteDate } from '@/utils/format';
 import { Feather } from '@expo/vector-icons';
@@ -112,9 +113,6 @@ const JOURNAL_TOOL_COLORS: Record<string, string> = {
   storage_intel: '#00E5CC',
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unused-vars
-type _ScanJournalEntryUsed = ScanJournalEntry; // keep import live
-
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ScheduleScreen() {
@@ -145,6 +143,14 @@ export default function ScheduleScreen() {
       <View style={[styles.divider, { backgroundColor: colors.border }]} />
       <Text style={[styles.sub, { color: colors.mutedForeground }]}>CONFIGURE YOUR AUTO-CLEAN SCHEDULE</Text>
 
+      {/* Coming Soon notice */}
+      <View style={[styles.comingSoonBox, { borderColor: colors.warning + '80', backgroundColor: colors.warning + '0D' }]}>
+        <Text style={[styles.comingSoonTitle, { color: colors.warning }]}>{'[!] BACKGROUND EXECUTION: V1.1'}</Text>
+        <Text style={[styles.comingSoonText, { color: colors.mutedForeground }]}>
+          {'> '} Auto-clean currently runs in the foreground only. Save your preferences here — they will activate automatically when background execution launches.
+        </Text>
+      </View>
+
       {/* Toggle */}
       <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
         <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
@@ -156,10 +162,10 @@ export default function ScheduleScreen() {
           }]} />
           <View style={styles.toggleText}>
             <Text style={[styles.toggleTitle, { color: colors.foreground }]}>
-              {scheduleSettings.enabled ? 'ACTIVE' : 'INACTIVE'}
+              {scheduleSettings.enabled ? 'PREFERENCES SAVED' : 'INACTIVE'}
             </Text>
             <Text style={[styles.toggleSub, { color: colors.mutedForeground }]}>
-              {scheduleSettings.enabled ? `REMINDER: ${scheduleSettings.frequency.toUpperCase()}` : 'SCHEDULE DISABLED'}
+              {scheduleSettings.enabled ? `CONFIGURED: ${scheduleSettings.frequency.toUpperCase()}` : 'SCHEDULE DISABLED'}
             </Text>
           </View>
           <Switch
@@ -471,4 +477,8 @@ const styles = StyleSheet.create({
   },
   emptyIcon: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
   emptyText: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, textAlign: 'center', lineHeight: 18 },
+
+  comingSoonBox: { padding: 12, gap: 6, borderWidth: 1, marginBottom: 16 },
+  comingSoonTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  comingSoonText: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3, lineHeight: 15 },
 });

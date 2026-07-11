@@ -15,6 +15,7 @@ import { useCleaner } from '@/context/CleanerContext';
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, formatDateShort } from '@/utils/format';
+import { sleep } from '@/utils/sleep';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
@@ -118,7 +119,7 @@ export default function ScreenshotManagerScreen() {
 
     setScreenshots(items);
     setPhase('verifying');
-    await new Promise(r => setTimeout(r, 1200));
+    await sleep(1200);
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
     } catch (e) {
@@ -152,7 +153,7 @@ export default function ScreenshotManagerScreen() {
       } catch {}
     }
 
-    await new Promise(r => setTimeout(r, 600));
+    await sleep(600);
     setFreedBytes(selectedSize);
     await addHistoryItem({
       date: new Date().toISOString(),
