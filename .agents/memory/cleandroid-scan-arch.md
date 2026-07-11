@@ -1,6 +1,6 @@
 ---
 name: CleanDroid scan architecture
-description: All scans use real APIs; MediaLibrary/FileSystem only; no fake data; sizes estimated from dimensions/duration. Shared utilities, snapshot/trend system, trust decisions, and voice/identity conventions.
+description: All scans use real APIs; MediaLibrary/FileSystem only; no fake data; sizes estimated from dimensions/duration. Shared utilities, snapshot/trend system, trust decisions, voice/identity conventions, and delight components.
 ---
 
 ## Core rule
@@ -10,7 +10,15 @@ No fake data, no Math.random(). Every scan uses real Expo APIs.
 - `utils/format.ts` — `formatBytes`, `formatDelta`, `formatRelativeDate`, `formatAbsoluteDate`, `formatDateShort`, `getAgeText`, `daysAgoLabel`
 - `components/SegBar.tsx` — retro pixel-block progress bar (props: `value`, `color`, `total?`, `height?`)
 - `components/TerminalLog.tsx` — auto-scrolling log box (props: `lines`, `maxHeight?`)
+- `components/BlinkingCursor.tsx` — shared Reanimated cursor (props: `color`, `char?` default `_`, `fontSize?` default 26); hard-on/snap-off 860ms cycle; use `char='█'` for block cursor
 - `hooks/useBevel.ts` — `useBevel()` returns asymmetric bevel border object; `useBevelPressed()` for active buttons
+
+## Boot sequence (first-launch only)
+- `components/BootScreen.tsx` — terminal boot overlay; 14 lines, ~5.2s total, fades out at end
+- Wired in `app/_layout.tsx`: renders as absolute overlay on top of `<RootLayoutNav />`; checks AsyncStorage key `cleandroid_booted`; calls `handleBootDone` which sets key to `'1'` so sequence never replays
+- `showBoot` state: `null` = checking, `true` = show, `false` = done/skip
+- Boot overlay uses `pointerEvents="none"` — does not block touches under it
+- On web: sequence still plays; `BootScreen` handles it fine
 
 ## Device Health (home screen)
 - Home screen shows a DEVICE STATUS card derived entirely from real device data — no invented percentages
@@ -65,6 +73,8 @@ Every recommendation answers: Why? / How much? / How old? / How safe?
 ## Outstanding TODOs
 - App Cache list is hardcoded (12 fake entries) — native module needed to enumerate installed apps
 - Background task UI exists but no task registered (`expo-background-fetch` + `expo-task-manager` installed)
+- 4-question recommendation cards (WHY / HOW MUCH / HOW SAFE / WHAT HAPPENS NEXT) — structured card UI for storage-intel, not yet built
+- Animated scan bar (pixel blocks sweep during active scans) — not yet built
 - AdMob not started
 - Context split (StorageContext / RecommendationContext / ScanContext / SettingsContext) — defer to v2
 

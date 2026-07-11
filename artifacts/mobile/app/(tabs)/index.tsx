@@ -21,6 +21,7 @@ import { useCleaner, MediaBreakdown } from '@/context/CleanerContext';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, formatDelta, formatRelativeDate } from '@/utils/format';
 import SegBar from '@/components/SegBar';
+import BlinkingCursor from '@/components/BlinkingCursor';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
@@ -89,14 +90,6 @@ function countRecos(bd: MediaBreakdown | null): number {
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 
-function BlinkCursor({ color }: { color: string }) {
-  const [vis, setVis] = useState(true);
-  useEffect(() => {
-    const id = setInterval(() => setVis(v => !v), 530);
-    return () => clearInterval(id);
-  }, []);
-  return <Text style={{ color, opacity: vis ? 1 : 0, fontSize: 26, fontFamily: 'Inter_700Bold' }}>_</Text>;
-}
 
 function ScanButton({ onPress }: { onPress: () => void }) {
   const colors = useColors();
@@ -250,7 +243,7 @@ export default function HomeScreen() {
           </Text>
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
             <Text style={[styles.appName, { color: colors.primary }]}>CLEANDROID</Text>
-            <BlinkCursor color={colors.primary} />
+            <BlinkingCursor color={colors.primary} />
           </View>
         </View>
         <Pressable

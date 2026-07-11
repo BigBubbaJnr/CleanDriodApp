@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { KeyboardProvider } from 'react-native-keyboard-controller';
@@ -13,11 +13,14 @@ import {
 } from '@expo-google-fonts/inter';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { CleanerProvider } from '@/context/CleanerContext';
+import BootScreen from '@/components/BootScreen';
 
 SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
+const BOOT_KEY = 'cleandroid_booted';
 
 function RootLayoutNav() {
   return (
@@ -41,11 +44,23 @@ export default function RootLayout() {
     Inter_700Bold,
   });
 
+  // null = still checking; true = show boot; false = skip
+  const [showBoot, setShowBoot] = useState<boolean | null>(null);
+
   useEffect(() => {
     if (fontsLoaded || fontError) {
       SplashScreen.hideAsync();
+      // Check first-launch flag only after fonts are ready (screen is visible)
+      AsyncStorage.getItem(BOOT_KEY).then(val => {
+        setShowBoot(val !== '1');
+      });
     }
   }, [fontsLoaded, fontError]);
+
+  const handleBootDone = useCallback(async () => {
+    await AsyncStorage.setItem(BOOT_KEY, '1');
+    setShowBoot(false);
+  }, []);
 
   if (!fontsLoaded && !fontError) return null;
 
@@ -57,6 +72,7 @@ export default function RootLayout() {
             <GestureHandlerRootView style={{ flex: 1 }}>
               <KeyboardProvider>
                 <RootLayoutNav />
+                {showBoot === true && <BootScreen onDone={handleBootDone} />}
               </KeyboardProvider>
             </GestureHandlerRootView>
           </CleanerProvider>
