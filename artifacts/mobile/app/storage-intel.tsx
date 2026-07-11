@@ -22,6 +22,7 @@ import { useColors } from '@/hooks/useColors';
 import {
   useCleaner,
   MediaBreakdown,
+  RichScanData,
   ScanSnapshot,
   estimateImageSize,
   estimateVideoSize,
@@ -66,6 +67,10 @@ interface AlbumIntelRow {
   assetCount: number;
   estimatedSize: number;
   oldestAssetDate?: number; // seconds (expo-media-library creationTime)
+  /** Seconds — most recent asset in the sampled set; used for recency detection */
+  newestAssetDate?: number;
+  /** True if all sampled assets are older than 180 days — album likely inactive */
+  isStale?: boolean;
 }
 
 // ── Advisor card builder ──────────────────────────────────────────────────────
@@ -75,6 +80,7 @@ function buildAdvisorCards(
   mediaBreakdown: MediaBreakdown | null,
   journal: ScanJournalEntry[],
   snapshots: ScanSnapshot[],
+  richScanData: RichScanData | null,
 ): AdvisorCard[] {
   const cards: AdvisorCard[] = [];
   const prevSnap: ScanSnapshot | null = snapshots.length >= 2 ? snapshots[1] : null;
@@ -126,6 +132,46 @@ function buildAdvisorCards(
       actionRoute: '/large-files',
       confidence: 'MEDIUM',
     });
+  }
+
+  // ── P2.5: SOURCE APP CONCENTRATION ───────────────────────────────────────
+  // Only available when Storage Intelligence Engine has run. Fires when one
+  // source app accounts for >35% of total scanned media AND >200 MB — this
+  // is the single most actionable insight unique to CleanDroid.
+  if (richScanData && richScanData.smartCategories.length > 0) {
+    const totalCatSize = richScanData.smartCategories.reduce((s, c) => s + c.estimatedSize, 0);
+    const top = richScanData.smartCategories[0];
+    const topShare = totalCatSize > 0 ? top.estimatedSize / totalCatSize : 0;
+    if (topShare > 0.35 && top.estimatedSize > 200 * 1024 * 1024) {
+      const sourceRoutes: Record<string, string> = {
+        screenshots:      '/screenshot-manager',
+        downloads:        '/junk-cleaner',
+        camera:           '/large-files',
+        screen_recording: '/large-files',
+        whatsapp:         '/duplicate-finder',
+        telegram:         '/large-files',
+        instagram:        '/large-files',
+        tiktok:           '/large-files',
+        twitter:          '/large-files',
+        facebook:         '/large-files',
+      };
+      const route = sourceRoutes[top.sourceApp] ?? '/large-files';
+      cards.push({
+        id: 'source_concentration',
+        priority: 2.5,
+        icon: top.icon as keyof typeof Feather.glyphMap,
+        category: 'SOURCE APP',
+        title: `${top.label.toUpperCase()} DOMINATES STORAGE`,
+        triggerSummary: `${Math.round(topShare * 100)}% of scanned media · ~${formatBytes(top.estimatedSize)} · ${top.count.toLocaleString()} items`,
+        recoveryBytes: Math.round(top.estimatedSize * 0.4),
+        safetyLevel: 'REVIEW',
+        explanation: `${top.label} is your single largest media source — ${Math.round(topShare * 100)}% of all scanned content (~${formatBytes(top.estimatedSize)} across ${top.count.toLocaleString()} items). This level of source concentration is common with active messaging apps, auto-save features, or frequent screen recording. Reviewing this source first gives the highest space return per item reviewed.`,
+        androidNote: undefined,
+        actionLabel: `REVIEW ${top.label.toUpperCase()} FILES`,
+        actionRoute: route,
+        confidence: 'MEDIUM',
+      });
+    }
   }
 
   // ── P3: DUPLICATES ────────────────────────────────────────────────────────
@@ -421,24 +467,31 @@ export default function StorageIntelScreen() {
         const albumData: AlbumIntelRow[] = [];
         await Promise.all(topAlbums.map(async (album) => {
           try {
+            // Fetch 12 assets sorted DESC (most recent first) — better
+            // recency detection than oldest-first sampling with 4 items.
             const { assets } = await MediaLibrary.getAssetsAsync({
               album: album.id,
-              first: 4,
+              first: 12,
               mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
-              sortBy: [MediaLibrary.SortBy.creationTime],
+              sortBy: [[MediaLibrary.SortBy.creationTime, false]] as any,
             });
             if (assets.length === 0) return;
 
             let sampleTotal = 0;
             let oldestTime: number | undefined;
+            let newestTime: number | undefined;
+            const staleThreshold = Date.now() / 1000 - 180 * 86400; // 180 days ago
             for (const asset of assets) {
               const s = asset.mediaType === MediaLibrary.MediaType.video
                 ? estimateVideoSize(asset.duration)
                 : estimateImageSize(asset.width, asset.height);
               sampleTotal += s;
               if (!oldestTime || asset.creationTime < oldestTime) oldestTime = asset.creationTime;
+              if (!newestTime || asset.creationTime > newestTime) newestTime = asset.creationTime;
             }
             const avgSize = sampleTotal / assets.length;
+            // Album is stale when even the most recently sampled asset is >180 days old
+            const isStale = newestTime !== undefined && newestTime < staleThreshold;
 
             albumData.push({
               id: album.id,
@@ -446,12 +499,14 @@ export default function StorageIntelScreen() {
               assetCount: album.assetCount,
               estimatedSize: Math.round(avgSize * album.assetCount),
               oldestAssetDate: oldestTime,
+              newestAssetDate: newestTime,
+              isStale,
             });
           } catch { /* skip inaccessible album */ }
         }));
 
         albumData.sort((a, b) => b.estimatedSize - a.estimatedSize);
-        setAlbumBreakdown(albumData.slice(0, 8));
+        setAlbumBreakdown(albumData.slice(0, 12));
         addLog(`folder analysis: ${albumData.length} folder${albumData.length !== 1 ? 's' : ''} mapped`);
       } catch {
         // Folder scan is best-effort — silently skip on failure
@@ -510,7 +565,7 @@ export default function StorageIntelScreen() {
   const nonSubsetCats = categories.filter(c => !c.isSubset && c.key !== 'appCache');
   const totalMediaSize = nonSubsetCats.reduce((acc, c) => acc + c.size, 0);
 
-  const advisorCards = buildAdvisorCards(storageStats, mediaBreakdown, journal, snapshots);
+  const advisorCards = buildAdvisorCards(storageStats, mediaBreakdown, journal, snapshots, richScanData);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -790,10 +845,25 @@ export default function StorageIntelScreen() {
                           </Text>
                           <Text style={[styles.catSize, { color: colors.primary }]}>~{formatBytes(album.estimatedSize)}</Text>
                         </View>
-                        <Text style={[styles.catCount, { color: colors.mutedForeground }]}>
-                          {album.assetCount.toLocaleString()} items
-                          {album.oldestAssetDate ? ` · oldest: ${getAgeText(album.oldestAssetDate)}` : ''}
-                        </Text>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginTop: 2 }}>
+                          <Text style={[styles.catCount, { color: colors.mutedForeground }]}>
+                            {album.assetCount.toLocaleString()} items
+                            {album.newestAssetDate ? ` · latest: ${getAgeText(album.newestAssetDate)}` :
+                             album.oldestAssetDate ? ` · oldest: ${getAgeText(album.oldestAssetDate)}` : ''}
+                          </Text>
+                          {album.isStale !== undefined && (
+                            <View style={{
+                              paddingHorizontal: 5, paddingVertical: 1, borderWidth: 1,
+                              borderColor: album.isStale ? '#FFFFFF30' : colors.success + '70',
+                              backgroundColor: album.isStale ? '#FFFFFF08' : colors.success + '18',
+                            }}>
+                              <Text style={{ fontSize: 8, fontFamily: 'Inter_700Bold', letterSpacing: 1,
+                                color: album.isStale ? colors.mutedForeground : colors.success }}>
+                                {album.isStale ? 'STALE' : 'ACTIVE'}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
                         <View style={{ marginTop: 5 }}>
                           <SegBar
                             value={album.estimatedSize / Math.max(1, albumBreakdown[0].estimatedSize)}

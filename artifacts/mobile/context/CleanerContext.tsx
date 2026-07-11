@@ -134,8 +134,10 @@ export interface RichAsset {
   height: number;
   /** Seconds */
   duration: number;
-  /** Seconds since epoch */
+  /** Seconds since epoch — from MediaLibrary creationTime */
   creationTime: number;
+  /** Seconds since epoch — from MediaLibrary modificationTime (0 if unavailable) */
+  modificationTime: number;
   estimatedSize: number;
   sourceApp: SourceApp;
   isScreenshot: boolean;
@@ -425,6 +427,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
             height: a.height,
             duration: a.duration,
             creationTime: a.creationTime,
+            modificationTime: (a as any).modificationTime ?? 0,
             estimatedSize: size,
             sourceApp,
             isScreenshot: screenshotIds.has(a.id),

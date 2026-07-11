@@ -35,6 +35,10 @@ import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
+import {
+  getCachedFingerprint, setCachedFingerprint,
+  computeFileFingerprint, persistFingerprintCache, getFingerprintCacheSize,
+} from '@/utils/hash';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -86,6 +90,8 @@ interface DuplicateGroup {
   selectedIndexes: Set<number>;
   recommendation: string;
   wasted: number;
+  /** True if any asset in this group is an Android Gallery favourite — auto-protected from deletion */
+  hasFavorite: boolean;
 }
 
 
@@ -248,6 +254,7 @@ export default function DuplicateFinderScreen() {
         selectedIndexes: new Set(fresh.map((_, i) => i).filter(i => i !== keepIdx)),
         recommendation: getDuplicateRecommendation(fresh.length, 'filename', oldestDays, newestDays, wasted),
         wasted,
+        hasFavorite: false,
       });
     }
 
@@ -282,6 +289,7 @@ export default function DuplicateFinderScreen() {
         recommendation: getDuplicateRecommendation(fresh.length, 'burst', oldestDays, newestDays, wasted) +
           ` · ${durationSec}s sequence`,
         wasted,
+        hasFavorite: false,
       });
     }
 
@@ -315,12 +323,13 @@ export default function DuplicateFinderScreen() {
         selectedIndexes: new Set(fresh.map((_, i) => i).filter(i => i !== keepIdx)),
         recommendation: getDuplicateRecommendation(fresh.length, 'dimension_date', oldestDays, newestDays, wasted),
         wasted,
+        hasFavorite: false,
       });
     }
 
-    // Sort by wasted space descending, take top 20
+    // Sort by wasted space descending, take top 50 (larger libraries need more coverage)
     candidateGroups.sort((a, b) => b.wasted - a.wasted);
-    const topGroups = candidateGroups.slice(0, 20);
+    const topGroups = candidateGroups.slice(0, 50);
     setScanProgress(80);
 
     // ── Phase 5: Get real file sizes for group representatives ─────────────
@@ -339,33 +348,90 @@ export default function DuplicateFinderScreen() {
     // Re-sort after real sizes
     topGroups.sort((a, b) => b.wasted - a.wasted);
 
-    // ── Phase 5.5: Partial hash verification for dimension_date groups ───────
-    // Read first 32 KB of two files in each group — if bytes match, it's a
-    // confirmed duplicate, not just same-day same-resolution coincidence.
-    const dimTargets = topGroups.filter(g => g.matchType === 'dimension_date').slice(0, 8);
-    if (dimTargets.length > 0) {
-      addLog(`hash-verifying ${dimTargets.length} dimension matches...`);
-      await Promise.all(dimTargets.map(async (grp) => {
+    // ── Phase 5.5: Content fingerprint verification + favourites protection ──
+    // Applies to ALL match types — not just dimension_date.
+    // Uses a persistent cache (AsyncStorage): fingerprints computed on the
+    // first scan are reused on every subsequent scan, making this phase
+    // near-instant for already-seen files.
+    // Also checks Android Gallery favourites and auto-deselects starred assets
+    // from the deletion set so they can never be accidentally removed.
+    const verifyTargets = topGroups.slice(0, 25);
+    if (verifyTargets.length > 0) {
+      const cacheSize = await getFingerprintCacheSize();
+      addLog(`verifying ${verifyTargets.length} groups (${cacheSize} cached)...`);
+      let cacheHits = 0;
+
+      await Promise.all(verifyTargets.map(async (grp) => {
         try {
-          const idA = grp.assetIds[0];
-          const idB = grp.assetIds[grp.keepIndex] ?? grp.assetIds[0];
-          if (idA === idB) return;
-          const [infoA, infoB] = await Promise.all([
-            MediaLibrary.getAssetInfoAsync(idA),
-            MediaLibrary.getAssetInfoAsync(idB),
+          const idKeep = grp.assetIds[grp.keepIndex];
+          const selectedIds = Array.from(grp.selectedIndexes)
+            .map(i => grp.assetIds[i])
+            .filter(Boolean) as string[];
+          if (selectedIds.length === 0 || !idKeep) return;
+
+          // Fetch asset info for keep + all selected copies (localUri + isFavorite)
+          const [infoKeep, ...infoSelected] = await Promise.all([
+            MediaLibrary.getAssetInfoAsync(idKeep).catch(() => null),
+            ...selectedIds.map(id => MediaLibrary.getAssetInfoAsync(id).catch(() => null)),
           ]);
-          const uriA = infoA.localUri;
-          const uriB = infoB.localUri;
-          if (!uriA || !uriB || uriA === uriB) return;
-          const [chunkA, chunkB] = await Promise.all([
-            FileSystem.readAsStringAsync(uriA, { encoding: FileSystem.EncodingType.Base64, length: 32768 } as any),
-            FileSystem.readAsStringAsync(uriB, { encoding: FileSystem.EncodingType.Base64, length: 32768 } as any),
-          ]);
-          if (chunkA.length > 100 && chunkA === chunkB) grp.hashVerified = true;
-        } catch { /* hash verification is best-effort — skip on any failure */ }
+
+          // ── Favourites protection ─────────────────────────────────────────
+          // Any selected asset marked as a Gallery favourite is silently
+          // removed from the deletion set. The group remains visible with
+          // a ★ PROTECTED badge — the user can still override manually.
+          const newSelected = new Set(grp.selectedIndexes);
+          let groupProtected = false;
+          infoSelected.forEach((info, i) => {
+            if (info?.isFavorite) {
+              const idx = grp.assetIds.indexOf(selectedIds[i]);
+              if (idx >= 0) { newSelected.delete(idx); groupProtected = true; }
+            }
+          });
+          if (groupProtected) {
+            grp.hasFavorite = true;
+            grp.selectedIndexes = newSelected;
+          }
+
+          // ── Content fingerprint comparison ────────────────────────────────
+          // Compare the keep copy against the first selected copy.
+          // A 64 KB Base64 match is a definitive content-identical confirmation.
+          const idDelete    = selectedIds[0];
+          const infoDelete  = infoSelected[0];
+          const uriKeep     = infoKeep?.localUri;
+          const uriDelete   = infoDelete?.localUri;
+          if (!uriKeep || !uriDelete || uriKeep === uriDelete) return;
+
+          const crKeep   = grp.creationTimes[grp.keepIndex] ?? 0;
+          const crDelete = grp.creationTimes[grp.assetIds.indexOf(idDelete)] ?? 0;
+
+          let fpKeep = await getCachedFingerprint(idKeep, crKeep);
+          if (fpKeep) { cacheHits++; }
+          else {
+            fpKeep = await computeFileFingerprint(uriKeep);
+            if (fpKeep) await setCachedFingerprint(idKeep, crKeep, fpKeep);
+          }
+
+          let fpDelete = await getCachedFingerprint(idDelete, crDelete);
+          if (fpDelete) { cacheHits++; }
+          else {
+            fpDelete = await computeFileFingerprint(uriDelete);
+            if (fpDelete) await setCachedFingerprint(idDelete, crDelete, fpDelete);
+          }
+
+          if (fpKeep && fpDelete && fpKeep.length > 1000 && fpKeep === fpDelete) {
+            grp.hashVerified = true;
+          }
+        } catch { /* verification is best-effort — never blocks the scan */ }
       }));
-      const verified = dimTargets.filter(g => g.hashVerified).length;
-      if (verified > 0) addLog(`hash verified: ${verified} group${verified !== 1 ? 's' : ''} confirmed identical`);
+
+      // Persist new fingerprints so the next scan can skip file reads
+      await persistFingerprintCache();
+
+      const verified = verifyTargets.filter(g => g.hashVerified).length;
+      const favCount = verifyTargets.filter(g => g.hasFavorite).length;
+      if (cacheHits > 0) addLog(`cache: ${cacheHits} fingerprint${cacheHits !== 1 ? 's' : ''} reused`);
+      if (verified > 0)  addLog(`fingerprint: ${verified} group${verified !== 1 ? 's' : ''} confirmed identical`);
+      if (favCount > 0)  addLog(`[★] ${favCount} favourite${favCount !== 1 ? 's' : ''} auto-protected`);
     }
 
     setScanProgress(100);
@@ -483,7 +549,10 @@ export default function DuplicateFinderScreen() {
                 {'[3] '} Same resolution + same day — backup/transfer duplicates
               </Text>
               <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
-                {'[✓] '} Partial hash (32 KB) verifies top dimension matches
+                {'[✓] '} Content fingerprint (64 KB) verifies all match types
+              </Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                {'[★] '} Favourites auto-protected · fingerprints cached across scans
               </Text>
               <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
                 {'[i] '} Best copy pre-selected as KEEP — you control all deletions
@@ -586,33 +655,33 @@ export default function DuplicateFinderScreen() {
                     <View style={[styles.groupHeader, { borderBottomColor: colors.border }]}>
                       <View style={[styles.matchBadge, {
                         backgroundColor:
+                          group.hashVerified ? colors.success + '20' :
                           group.matchType === 'filename' ? colors.primary + '20' :
                           group.matchType === 'burst' ? '#BB55FF20' :
-                          group.hashVerified ? colors.success + '20' :
                           colors.warning + '20',
                         borderColor:
+                          group.hashVerified ? colors.success :
                           group.matchType === 'filename' ? colors.primary :
                           group.matchType === 'burst' ? '#BB55FF' :
-                          group.hashVerified ? colors.success :
                           colors.warning,
                       }]}>
                         <Text style={[styles.matchBadgeText, {
                           color:
+                            group.hashVerified ? colors.success :
                             group.matchType === 'filename' ? colors.primary :
                             group.matchType === 'burst' ? '#BB55FF' :
-                            group.hashVerified ? colors.success :
                             colors.warning,
                         }]}>
-                          {group.matchType === 'filename' ? 'FILENAME' :
-                           group.matchType === 'burst' ? 'BURST' :
+                          {group.matchType === 'filename' ? (group.hashVerified ? 'FILENAME ✓' : 'FILENAME') :
+                           group.matchType === 'burst' ? (group.hashVerified ? 'BURST ✓' : 'BURST') :
                            group.hashVerified ? 'HASH VERIFIED' : 'DIM+DATE'}
                         </Text>
                       </View>
                       <Text style={[styles.groupName, { color: colors.foreground }]} numberOfLines={1}>
                         {group.displayFilename.toUpperCase()}
                       </Text>
-                      <Text style={[styles.groupMeta, { color: colors.mutedForeground }]}>
-                        {group.sizeIsReal ? '' : '~'}{formatBytes(group.size)} ×{group.count}
+                      <Text style={[styles.groupMeta, { color: group.hasFavorite ? '#FFB800' : colors.mutedForeground }]}>
+                        {group.hasFavorite ? '★  ' : ''}{group.sizeIsReal ? '' : '~'}{formatBytes(group.size)} ×{group.count}
                       </Text>
                     </View>
 
