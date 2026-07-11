@@ -143,12 +143,12 @@ export default function ScheduleScreen() {
       <Text style={[styles.sysLabel, { color: colors.mutedForeground }]}>{'> DAEMON CONFIG'}</Text>
       <Text style={[styles.heading, { color: colors.foreground }]}>AUTO-CLEAN</Text>
       <View style={[styles.divider, { backgroundColor: colors.border }]} />
-      <Text style={[styles.sub, { color: colors.mutedForeground }]}>DAEMON HANDLES IT — ZERO MAINTENANCE</Text>
+      <Text style={[styles.sub, { color: colors.mutedForeground }]}>CONFIGURE YOUR AUTO-CLEAN SCHEDULE</Text>
 
       {/* Toggle */}
       <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
         <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
-          <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[DAEMON STATUS]'}</Text>
+          <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[CLEAN SCHEDULE]'}</Text>
         </View>
         <View style={styles.toggleRow}>
           <View style={[styles.statusDot, {
@@ -159,7 +159,7 @@ export default function ScheduleScreen() {
               {scheduleSettings.enabled ? 'ACTIVE' : 'INACTIVE'}
             </Text>
             <Text style={[styles.toggleSub, { color: colors.mutedForeground }]}>
-              {scheduleSettings.enabled ? `RUNS ${scheduleSettings.frequency.toUpperCase()}` : 'DAEMON OFFLINE'}
+              {scheduleSettings.enabled ? `REMINDER: ${scheduleSettings.frequency.toUpperCase()}` : 'SCHEDULE DISABLED'}
             </Text>
           </View>
           <Switch

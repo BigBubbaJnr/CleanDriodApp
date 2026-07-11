@@ -290,7 +290,7 @@ export default function LargeFilesScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]} accessibilityLabel="Go back" accessibilityRole="button">
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -358,7 +358,7 @@ export default function LargeFilesScreen() {
                 {'[i] '} Remaining sizes estimated from dimensions
               </Text>
             </View>
-            <Pressable onPress={startScan} style={styles.fullWidth}>
+            <Pressable onPress={startScan} style={styles.fullWidth} accessibilityLabel="Start large file scan" accessibilityRole="button">
               <View style={[styles.primaryBtn, {
                 backgroundColor: accentAmber,
                 borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,

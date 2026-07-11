@@ -357,7 +357,7 @@ export default function DuplicateFinderScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]} accessibilityLabel="Go back" accessibilityRole="button">
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -393,7 +393,7 @@ export default function DuplicateFinderScreen() {
                 {'[i] '} Real file sizes fetched for top groups
               </Text>
             </View>
-            <Pressable onPress={startScan} style={styles.fullWidth}>
+            <Pressable onPress={startScan} style={styles.fullWidth} accessibilityLabel="Start duplicate scan" accessibilityRole="button">
               <View style={[styles.primaryBtn, {
                 backgroundColor: accentGreen,
                 borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,

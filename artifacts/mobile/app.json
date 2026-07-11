@@ -11,7 +11,7 @@
     "splash": {
       "image": "./assets/images/icon.png",
       "resizeMode": "contain",
-      "backgroundColor": "#0B0B18"
+      "backgroundColor": "#080808"
     },
     "ios": {
       "supportsTablet": false,
@@ -19,17 +19,14 @@
     },
     "android": {
       "package": "com.cleandroid.app",
+      "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/icon.png",
-        "backgroundColor": "#0B0B18"
+        "backgroundColor": "#080808"
       },
       "permissions": [
-        "android.permission.READ_EXTERNAL_STORAGE",
-        "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.READ_MEDIA_IMAGES",
         "android.permission.READ_MEDIA_VIDEO",
-        "android.permission.READ_MEDIA_AUDIO",
-        "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.VIBRATE"
       ]
     },
@@ -37,19 +34,14 @@
       "favicon": "./assets/images/icon.png"
     },
     "plugins": [
-      [
-        "expo-router",
-        {
-          "origin": "https://replit.com/"
-        }
-      ],
+      "expo-router",
       "expo-font",
       "expo-web-browser",
       [
         "expo-media-library",
         {
-          "photosPermission": "Allow CleanDroid to scan your photos to find and remove duplicates.",
-          "savePhotosPermission": "Allow CleanDroid to delete duplicate photos during cleanup.",
+          "photosPermission": "CleanDroid needs access to your photos and videos to scan for duplicates and large files. No files are uploaded — all processing happens on your device.",
+          "savePhotosPermission": "CleanDroid needs permission to delete files you select during a cleanup. Only files you explicitly choose are removed.",
           "isAccessMediaLocationEnabled": true
         }
       ],
@@ -57,7 +49,7 @@
         "expo-notifications",
         {
           "icon": "./assets/images/icon.png",
-          "color": "#7B6EFA"
+          "color": "#00E5CC"
         }
       ]
     ],

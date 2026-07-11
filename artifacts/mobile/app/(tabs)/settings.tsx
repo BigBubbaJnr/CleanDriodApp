@@ -5,7 +5,13 @@ import { useCleaner } from '@/context/CleanerContext';
 import { formatBytes } from '@/utils/format';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Linking from 'expo-linking';
+import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+// Update these before Play Store submission
+const PRIVACY_POLICY_URL = 'https://cleandroid.app/privacy';
+const FEEDBACK_EMAIL = 'mailto:hello@cleandroid.app?subject=CleanDroid%20Feedback';
 
 function SysRow({
   label, value, icon, right, onPress, danger,
@@ -135,9 +141,24 @@ export default function SettingsScreen() {
         borderBottomColor: colors.bevelDark,
         borderRightColor: colors.bevelDark,
       }]}>
-        <SysRow icon="info" label="CleanDroid" value="Build 1.0.0" />
+        <SysRow
+          icon="info"
+          label="CleanDroid"
+          value={`v${Constants.expoConfig?.version ?? '1.0.0'} — Build ${Constants.expoConfig?.android?.versionCode ?? 1}`}
+        />
         <SysRow icon="heart" label="Free Forever" value="NO PAYWALLS. NO TIERS. NO EXCEPTIONS." />
-        <SysRow icon="lock" label="Privacy" value="ALL OPS LOCAL — ZERO NETWORK CALLS" />
+        <SysRow
+          icon="file-text"
+          label="Privacy Policy"
+          value="ALL OPS LOCAL — ZERO NETWORK CALLS"
+          onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}
+        />
+        <SysRow
+          icon="mail"
+          label="Send Feedback"
+          value="REPORT A BUG OR SUGGEST A FEATURE"
+          onPress={() => Linking.openURL(FEEDBACK_EMAIL)}
+        />
       </View>
 
       {/* Free pledge — retro box */}

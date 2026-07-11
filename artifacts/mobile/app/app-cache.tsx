@@ -182,7 +182,7 @@ export default function AppCacheScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]} accessibilityLabel="Go back" accessibilityRole="button">
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -243,8 +243,13 @@ export default function AppCacheScreen() {
 
             {/* App selection */}
             <Text style={[styles.sectionLabel, { color: colors.primary }]}>
-              {'── SELECT APPS FOR SWEEP ─────────────'}
+              {'── COMMON APPS — ESTIMATED SIZES ─────'}
             </Text>
+            <View style={[styles.estimatedNote, { borderColor: colors.border, backgroundColor: colors.muted }]}>
+              <Text style={[styles.estimatedNoteText, { color: colors.mutedForeground }]}>
+                {'[i] '} Android does not expose per-app cache sizes to third-party apps. Sizes shown are typical estimates for common apps. Smart Sweep opens each app's Settings page so you can clear the real amount.
+              </Text>
+            </View>
             <View style={[styles.listPanel, bevel, { backgroundColor: colors.card }]}>
               {apps.map((app, idx) => (
                 <Pressable
@@ -266,7 +271,7 @@ export default function AppCacheScreen() {
                     <Feather name={app.icon} size={13} color={colors.mutedForeground} />
                   </View>
                   <Text style={[styles.appName, { color: colors.foreground }]}>{app.name}</Text>
-                  <Text style={[styles.appSize, { color: colors.accent }]}>{formatBytes(app.cacheSize)}</Text>
+                  <Text style={[styles.appSize, { color: colors.accent }]}>~{formatBytes(app.cacheSize)}</Text>
                 </Pressable>
               ))}
             </View>
@@ -316,7 +321,7 @@ export default function AppCacheScreen() {
                     {app.selected && <Text style={styles.checkMark}>✓</Text>}
                   </View>
                   <Text style={[styles.appName, { color: colors.foreground, flex: 1 }]}>{app.name}</Text>
-                  <Text style={[styles.appSize, { color: colors.accent }]}>{formatBytes(app.cacheSize)}</Text>
+                  <Text style={[styles.appSize, { color: colors.accent }]}>~{formatBytes(app.cacheSize)}</Text>
                 </Pressable>
               ))}
             </View>
@@ -430,6 +435,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingBottom: 12, borderBottomWidth: 1,
   },
   backBtn: { width: 36, height: 36, alignItems: 'center', justifyContent: 'center' },
+  estimatedNote: { padding: 10, marginBottom: 6, borderWidth: 1 },
+  estimatedNoteText: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3, lineHeight: 15 },
   headerSub: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 2 },
   headerTitle: { fontSize: 14, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
   content: { padding: 16 },

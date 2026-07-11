@@ -313,7 +313,7 @@ export default function JunkCleanerScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]} accessibilityLabel="Go back" accessibilityRole="button">
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -348,7 +348,7 @@ export default function JunkCleanerScreen() {
               <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>{'[+] Old large videos (>200 MB, >90 days)'}</Text>
               <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>{'[i] '} Video/image sizes are estimated</Text>
             </View>
-            <Pressable onPress={startScan} style={styles.fullWidth}>
+            <Pressable onPress={startScan} style={styles.fullWidth} accessibilityLabel="Start junk scan" accessibilityRole="button">
               <View style={[styles.primaryBtn, {
                 backgroundColor: colors.primary,
                 borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
