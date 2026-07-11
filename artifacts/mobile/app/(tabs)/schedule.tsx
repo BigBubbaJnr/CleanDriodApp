@@ -1,7 +1,16 @@
-import React from 'react';
+/**
+ * Schedule tab — auto-clean daemon config + rich history with trends.
+ *
+ * History section shows:
+ *   - Running total freed (all time)
+ *   - Breakdown by type (junk, duplicates, large_files, cache, screenshots)
+ *   - Week-over-week trend comparing last 7 days vs prior 7 days
+ *   - Full chronological log
+ */
+import React, { useMemo } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
-import { useCleaner } from '@/context/CleanerContext';
+import { useCleaner, CleanHistoryItem } from '@/context/CleanerContext';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -34,22 +43,73 @@ function getNextRun(frequency: Frequency): string {
   return next.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }).toUpperCase();
 }
 
-function typeIcon(type: string): keyof typeof Feather.glyphMap {
-  switch (type) {
-    case 'junk': return 'trash-2';
-    case 'duplicates': return 'copy';
-    case 'large_files': return 'hard-drive';
-    case 'cache': return 'cpu';
-    default: return 'zap';
-  }
+const TYPE_ICONS: Record<string, keyof typeof Feather.glyphMap> = {
+  junk: 'trash-2', duplicates: 'copy', large_files: 'hard-drive',
+  cache: 'cpu', full: 'zap', screenshots: 'monitor',
+};
+
+const TYPE_COLORS: Record<string, string> = {
+  junk: '#00E5CC', duplicates: '#39FF14', large_files: '#FFB800',
+  cache: '#FF5500', full: '#00E5CC', screenshots: '#39FF14',
+};
+
+const TYPE_LABELS: Record<string, string> = {
+  junk: 'JUNK CLEANER', duplicates: 'DUPLICATES', large_files: 'LARGE FILES',
+  cache: 'APP CACHE', full: 'FULL SCAN', screenshots: 'SCREENSHOTS',
+};
+
+// ── Analytics helpers ────────────────────────────────────────────────────────
+
+function computeTypeBreakdown(history: CleanHistoryItem[]) {
+  const types = ['junk', 'duplicates', 'large_files', 'cache', 'screenshots'] as const;
+  return types
+    .map(type => ({
+      type,
+      total: history.filter(h => h.type === type).reduce((acc, h) => acc + h.bytesFreed, 0),
+      count: history.filter(h => h.type === type).length,
+    }))
+    .filter(t => t.count > 0)
+    .sort((a, b) => b.total - a.total);
 }
+
+function computeWeeklyTrend(history: CleanHistoryItem[]): {
+  thisWeek: number;
+  lastWeek: number;
+  trend: 'up' | 'down' | 'same';
+} {
+  const now = Date.now();
+  const week = 7 * 24 * 60 * 60 * 1000;
+  const thisWeek = history
+    .filter(h => now - new Date(h.date).getTime() < week)
+    .reduce((acc, h) => acc + h.bytesFreed, 0);
+  const lastWeek = history
+    .filter(h => {
+      const age = now - new Date(h.date).getTime();
+      return age >= week && age < 2 * week;
+    })
+    .reduce((acc, h) => acc + h.bytesFreed, 0);
+  const trend = thisWeek > lastWeek * 1.1 ? 'up' : thisWeek < lastWeek * 0.9 ? 'down' : 'same';
+  return { thisWeek, lastWeek, trend };
+}
+
+// ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ScheduleScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { scheduleSettings, updateSchedule, history } = useCleaner();
+  const { scheduleSettings, updateSchedule, history, totalBytesFreed } = useCleaner();
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
+
+  const bevelRaised = {
+    borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
+    borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+  };
+
+  const breakdown = useMemo(() => computeTypeBreakdown(history), [history]);
+  const trend = useMemo(() => computeWeeklyTrend(history), [history]);
+  const maxBreakdownTotal = breakdown.length > 0 ? breakdown[0].total : 1;
 
   return (
     <ScrollView
@@ -67,18 +127,14 @@ export default function ScheduleScreen() {
       <Text style={[styles.sub, { color: colors.mutedForeground }]}>SET IT AND FORGET IT</Text>
 
       {/* Toggle */}
-      <View style={[styles.panel, {
-        backgroundColor: colors.card,
-        borderTopColor: colors.bevelLight,
-        borderLeftColor: colors.bevelLight,
-        borderBottomColor: colors.bevelDark,
-        borderRightColor: colors.bevelDark,
-      }]}>
+      <View style={[styles.panel, bevelRaised, { backgroundColor: colors.card }]}>
         <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
           <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[DAEMON STATUS]'}</Text>
         </View>
         <View style={styles.toggleRow}>
-          <View style={[styles.statusDot, { backgroundColor: scheduleSettings.enabled ? colors.success : colors.mutedForeground }]} />
+          <View style={[styles.statusDot, {
+            backgroundColor: scheduleSettings.enabled ? colors.success : colors.mutedForeground,
+          }]} />
           <View style={styles.toggleText}>
             <Text style={[styles.toggleTitle, { color: colors.foreground }]}>
               {scheduleSettings.enabled ? 'ACTIVE' : 'INACTIVE'}
@@ -102,13 +158,7 @@ export default function ScheduleScreen() {
           <Text style={[styles.sectionLabel, { color: colors.primary }]}>
             {'── INTERVAL ─────────────────────────'}
           </Text>
-          <View style={[styles.panel, {
-            backgroundColor: colors.card,
-            borderTopColor: colors.bevelLight,
-            borderLeftColor: colors.bevelLight,
-            borderBottomColor: colors.bevelDark,
-            borderRightColor: colors.bevelDark,
-          }]}>
+          <View style={[styles.panel, bevelRaised, { backgroundColor: colors.card }]}>
             {FREQUENCIES.map((f, idx) => {
               const active = scheduleSettings.frequency === f.value;
               return (
@@ -132,7 +182,6 @@ export default function ScheduleScreen() {
               );
             })}
           </View>
-
           <View style={[styles.nextRunBox, { borderColor: colors.primary + '40', backgroundColor: colors.primary + '08' }]}>
             <Text style={[styles.nextRunLabel, { color: colors.mutedForeground }]}>NEXT EXECUTION</Text>
             <Text style={[styles.nextRunValue, { color: colors.primary }]}>
@@ -142,25 +191,111 @@ export default function ScheduleScreen() {
         </>
       )}
 
-      {/* History */}
+      {/* ── Storage History ── */}
       {history.length > 0 ? (
         <>
           <Text style={[styles.sectionLabel, { color: colors.primary, marginTop: 20 }]}>
+            {'── STORAGE HISTORY ──────────────────'}
+          </Text>
+
+          {/* All-time total */}
+          <View style={[styles.totalPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <Text style={[styles.totalLabel, { color: colors.mutedForeground }]}>TOTAL FREED (ALL TIME)</Text>
+            <Text style={[styles.totalValue, { color: colors.primary }]}>{formatBytes(totalBytesFreed)}</Text>
+            <Text style={[styles.totalSub, { color: colors.mutedForeground }]}>
+              {history.length} OPERATION{history.length !== 1 ? 'S' : ''}
+            </Text>
+          </View>
+
+          {/* Weekly trend */}
+          {(trend.thisWeek > 0 || trend.lastWeek > 0) && (
+            <View style={[styles.trendPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <Text style={[styles.panelHead, { color: colors.primary }]}>{'[WEEKLY TREND]'}</Text>
+              <View style={styles.trendRow}>
+                <View style={styles.trendCol}>
+                  <Text style={[styles.trendPeriod, { color: colors.mutedForeground }]}>THIS WEEK</Text>
+                  <Text style={[styles.trendVal, { color: colors.primary }]}>{formatBytes(trend.thisWeek)}</Text>
+                </View>
+                <View style={[styles.trendArrow]}>
+                  <Feather
+                    name={trend.trend === 'up' ? 'trending-up' : trend.trend === 'down' ? 'trending-down' : 'minus'}
+                    size={20}
+                    color={trend.trend === 'up' ? colors.success : trend.trend === 'down' ? colors.destructive : colors.mutedForeground}
+                  />
+                </View>
+                <View style={[styles.trendCol, { alignItems: 'flex-end' }]}>
+                  <Text style={[styles.trendPeriod, { color: colors.mutedForeground }]}>LAST WEEK</Text>
+                  <Text style={[styles.trendVal, { color: colors.mutedForeground }]}>{formatBytes(trend.lastWeek)}</Text>
+                </View>
+              </View>
+              <Text style={[styles.trendNote, { color: colors.mutedForeground }]}>
+                {trend.trend === 'up'
+                  ? '> More storage cleaned this week than last — good progress'
+                  : trend.trend === 'down' && trend.lastWeek > 0
+                    ? '> Less cleaned this week — run a scan to find more space'
+                    : '> Storage activity consistent week-over-week'
+                }
+              </Text>
+            </View>
+          )}
+
+          {/* Breakdown by type */}
+          {breakdown.length > 0 && (
+            <View style={[styles.panel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
+                <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[BY CATEGORY]'}</Text>
+              </View>
+              {breakdown.map((item, idx) => (
+                <View
+                  key={item.type}
+                  style={[
+                    styles.breakdownRow,
+                    idx < breakdown.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                  ]}
+                >
+                  <Feather name={TYPE_ICONS[item.type]} size={13} color={TYPE_COLORS[item.type]} />
+                  <View style={styles.breakdownInfo}>
+                    <View style={styles.breakdownTopRow}>
+                      <Text style={[styles.breakdownLabel, { color: colors.foreground }]}>
+                        {TYPE_LABELS[item.type]}
+                      </Text>
+                      <Text style={[styles.breakdownBytes, { color: TYPE_COLORS[item.type] }]}>
+                        {formatBytes(item.total)}
+                      </Text>
+                    </View>
+                    {/* Mini bar */}
+                    <View style={styles.breakdownBarRow}>
+                      {Array.from({ length: 16 }, (_, i) => (
+                        <View
+                          key={i}
+                          style={{
+                            flex: 1, height: 4,
+                            backgroundColor: i < Math.round((item.total / maxBreakdownTotal) * 16)
+                              ? TYPE_COLORS[item.type] : colors.border,
+                          }}
+                        />
+                      ))}
+                      <Text style={[styles.breakdownCount, { color: colors.mutedForeground }]}>
+                        {'  '}{item.count}×
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              ))}
+            </View>
+          )}
+
+          {/* Chronological log */}
+          <Text style={[styles.sectionLabel, { color: colors.primary, marginTop: 8 }]}>
             {'── EXECUTION LOG ────────────────────'}
           </Text>
-          <View style={[styles.panel, {
-            backgroundColor: colors.card,
-            borderTopColor: colors.bevelLight,
-            borderLeftColor: colors.bevelLight,
-            borderBottomColor: colors.bevelDark,
-            borderRightColor: colors.bevelDark,
-          }]}>
+          <View style={[styles.panel, bevelRaised, { backgroundColor: colors.card }]}>
             {history.map((item, idx) => (
               <View
                 key={item.id}
                 style={[styles.histRow, idx < history.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
               >
-                <Feather name={typeIcon(item.type)} size={13} color={colors.primary} />
+                <Feather name={TYPE_ICONS[item.type] ?? 'zap'} size={13} color={colors.primary} />
                 <View style={styles.histContent}>
                   <Text style={[styles.histLabel, { color: colors.foreground }]} numberOfLines={1}>
                     {item.label.toUpperCase()}
@@ -173,17 +308,10 @@ export default function ScheduleScreen() {
           </View>
         </>
       ) : (
-        <View style={[styles.emptyBox, {
-          backgroundColor: colors.card,
-          borderTopColor: colors.bevelLight,
-          borderLeftColor: colors.bevelLight,
-          borderBottomColor: colors.bevelDark,
-          borderRightColor: colors.bevelDark,
-          marginTop: 20,
-        }]}>
+        <View style={[styles.emptyBox, bevelRaised, { backgroundColor: colors.card, marginTop: 20 }]}>
           <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ LOG EMPTY ]'}</Text>
           <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-            Execution history appears after first scan
+            History and trends appear here after your first cleaning operation
           </Text>
         </View>
       )}
@@ -199,17 +327,18 @@ const styles = StyleSheet.create({
   divider: { height: 1, marginBottom: 10 },
   sub: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 2, marginBottom: 20 },
   sectionLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 10 },
-  panel: {
-    marginBottom: 14,
-    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-  },
+
+  panel: { marginBottom: 14, borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2 },
   panelHeader: { padding: 10, borderBottomWidth: 1 },
   panelTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  panelHead: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 8 },
+
   toggleRow: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
   statusDot: { width: 10, height: 10 },
   toggleText: { flex: 1 },
   toggleTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 1.5 },
   toggleSub: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginTop: 2 },
+
   freqRow: { flexDirection: 'row', alignItems: 'center', padding: 14, gap: 12 },
   radioOuter: { width: 16, height: 16, borderWidth: 2, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   radioInner: { width: 7, height: 7, borderRadius: 4 },
@@ -219,15 +348,44 @@ const styles = StyleSheet.create({
   nextRunBox: { borderWidth: 1, padding: 12, gap: 4, marginBottom: 4 },
   nextRunLabel: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 2 },
   nextRunValue: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+
+  totalPanel: {
+    padding: 16, alignItems: 'center', gap: 4, marginBottom: 14,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+  },
+  totalLabel: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 2 },
+  totalValue: { fontSize: 38, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  totalSub: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
+
+  trendPanel: {
+    padding: 14, gap: 10, marginBottom: 14,
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+  },
+  trendRow: { flexDirection: 'row', alignItems: 'center' },
+  trendCol: { flex: 1, gap: 3 },
+  trendArrow: { width: 48, alignItems: 'center' },
+  trendPeriod: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5 },
+  trendVal: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+  trendNote: { fontSize: 10, fontFamily: 'Inter_400Regular', lineHeight: 16 },
+
+  breakdownRow: { flexDirection: 'row', alignItems: 'flex-start', padding: 12, gap: 10 },
+  breakdownInfo: { flex: 1, gap: 6 },
+  breakdownTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  breakdownLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  breakdownBytes: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+  breakdownBarRow: { flexDirection: 'row', gap: 2, alignItems: 'center' },
+  breakdownCount: { fontSize: 9, fontFamily: 'Inter_400Regular' },
+
   histRow: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
   histContent: { flex: 1 },
   histLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.5 },
   histDate: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginTop: 2 },
   histSize: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+
   emptyBox: {
-    padding: 32, alignItems: 'center', gap: 10,
+    padding: 32, alignItems: 'center', gap: 10, marginBottom: 8,
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
   emptyIcon: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
-  emptyText: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, textAlign: 'center' },
+  emptyText: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, textAlign: 'center', lineHeight: 18 },
 });

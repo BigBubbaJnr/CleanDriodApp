@@ -1,3 +1,10 @@
+/**
+ * Storage Intelligence — real MediaLibrary breakdown + trend comparison.
+ *
+ * After each scan, saves a ScanSnapshot to context (persisted).
+ * On re-scan, compares with the most recent previous snapshot and shows
+ * delta values: used space Δ, category Δ.
+ */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -10,11 +17,13 @@ import {
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
-import { useCleaner, MediaBreakdown } from '@/context/CleanerContext';
+import { useCleaner, MediaBreakdown, ScanSnapshot } from '@/context/CleanerContext';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
@@ -22,10 +31,41 @@ function formatBytes(bytes: number): string {
   return (bytes / 1024).toFixed(0) + ' KB';
 }
 
+function formatDelta(delta: number): string {
+  const sign = delta >= 0 ? '+' : '-';
+  return `${sign}${formatBytes(Math.abs(delta))}`;
+}
+
 function formatDate(iso: string): string {
   const d = new Date(iso);
-  return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).toUpperCase();
 }
+
+function daysAgo(iso: string): string {
+  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  if (d === 0) return 'TODAY';
+  if (d === 1) return 'YESTERDAY';
+  if (d < 7) return `${d} DAYS AGO`;
+  if (d < 30) return `${Math.floor(d / 7)} WEEKS AGO`;
+  return `${Math.floor(d / 30)} MONTHS AGO`;
+}
+
+function getRecommendation(bd: MediaBreakdown): string[] {
+  const recos: string[] = [];
+  const totalMediaSize = bd.images.size + bd.videos.size + bd.audio.size + bd.screenshots.size;
+  if (totalMediaSize > 0) {
+    const videoPct = bd.videos.size / totalMediaSize;
+    if (videoPct > 0.5) recos.push(`Videos are ${Math.round(videoPct * 100)}% of media — review old recordings`);
+    const ssPct = bd.screenshots.size / totalMediaSize;
+    if (ssPct > 0.1) recos.push(`${bd.screenshots.count} screenshots taking ~${formatBytes(bd.screenshots.size)} — use Screenshot Manager`);
+    if (bd.downloads.count > 50) recos.push(`${bd.downloads.count} items in Downloads — Junk Cleaner can clear large ones`);
+  }
+  if (bd.appCache.size > 50 * 1024 * 1024) recos.push(`App cache is ${formatBytes(bd.appCache.size)} — Cache Cleaner can clear it`);
+  if (recos.length === 0) recos.push('Storage looks healthy — no immediate action needed');
+  return recos;
+}
+
+// ── Sub-components ───────────────────────────────────────────────────────────
 
 function SegBar({ value, color, total = 20 }: { value: number; color: string; total?: number }) {
   const colors = useColors();
@@ -59,6 +99,8 @@ function TerminalLog({ lines }: { lines: string[] }) {
   );
 }
 
+// ── Screen ───────────────────────────────────────────────────────────────────
+
 interface CategoryRow {
   key: string;
   label: string;
@@ -66,14 +108,16 @@ interface CategoryRow {
   count: number;
   size: number;
   color: string;
+  prevSize?: number;
   action?: () => void;
   actionLabel?: string;
+  isSubset?: boolean; // e.g. Downloads is a subset of images+videos
 }
 
 export default function StorageIntelScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { storageStats, mediaBreakdown, scanMediaLibrary } = useCleaner();
+  const { storageStats, mediaBreakdown, snapshots, scanMediaLibrary, addScanSnapshot } = useCleaner();
 
   const [scanning, setScanning] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -91,13 +135,31 @@ export default function StorageIntelScreen() {
     setProgress(0);
     setLogs([]);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await scanMediaLibrary(
+
+    const bd = await scanMediaLibrary(
       pct => setProgress(pct),
       msg => addLog(msg),
     );
+
+    // Save snapshot for trend tracking
+    if (bd && storageStats) {
+      await addScanSnapshot({
+        timestamp: new Date().toISOString(),
+        totalSpace: storageStats.totalSpace,
+        usedSpace: storageStats.usedSpace,
+        freeSpace: storageStats.freeSpace,
+        appCacheSize: storageStats.appCacheSize,
+        mediaItemCount: bd.totalScanned,
+        imageSize: bd.images.size,
+        videoSize: bd.videos.size,
+        audioSize: bd.audio.size,
+        screenshotSize: bd.screenshots.size,
+      });
+    }
+
     setScanning(false);
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  }, [scanMediaLibrary, addLog]);
+  }, [scanMediaLibrary, addLog, addScanSnapshot, storageStats]);
 
   const bevelRaised = {
     borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
@@ -105,7 +167,10 @@ export default function StorageIntelScreen() {
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   };
 
-  // Storage bar segments
+  // Previous snapshot (second in array, since new one was just added)
+  const prevSnap: ScanSnapshot | null = snapshots.length >= 2 ? snapshots[1] : null;
+  const currentSnap: ScanSnapshot | null = snapshots.length >= 1 ? snapshots[0] : null;
+
   const total = storageStats?.totalSpace ?? 1;
   const used = storageStats?.usedSpace ?? 0;
   const free = storageStats?.freeSpace ?? 0;
@@ -114,36 +179,42 @@ export default function StorageIntelScreen() {
     {
       key: 'images', label: 'IMAGES', icon: 'image', color: colors.primary,
       count: mediaBreakdown.images.count, size: mediaBreakdown.images.size,
+      prevSize: prevSnap?.imageSize,
     },
     {
       key: 'videos', label: 'VIDEOS', icon: 'film', color: colors.accent,
       count: mediaBreakdown.videos.count, size: mediaBreakdown.videos.size,
+      prevSize: prevSnap?.videoSize,
+      action: () => router.push('/large-files'), actionLabel: 'VIEW →',
     },
     {
       key: 'audio', label: 'AUDIO', icon: 'music', color: colors.warning,
       count: mediaBreakdown.audio.count, size: mediaBreakdown.audio.size,
+      prevSize: prevSnap?.audioSize,
     },
     {
       key: 'screenshots', label: 'SCREENSHOTS', icon: 'monitor', color: colors.success,
       count: mediaBreakdown.screenshots.count, size: mediaBreakdown.screenshots.size,
-      action: () => router.push('/screenshot-manager'),
-      actionLabel: 'MANAGE →',
+      prevSize: prevSnap?.screenshotSize,
+      action: () => router.push('/screenshot-manager'), actionLabel: 'MANAGE →',
     },
     {
       key: 'downloads', label: 'DOWNLOADS*', icon: 'download', color: '#7B7BFF',
       count: mediaBreakdown.downloads.count, size: mediaBreakdown.downloads.size,
-      action: () => router.push('/junk-cleaner'),
-      actionLabel: 'CLEAN →',
+      action: () => router.push('/junk-cleaner'), actionLabel: 'CLEAN →',
+      isSubset: true,
     },
     {
       key: 'appCache', label: 'APP CACHE', icon: 'cpu', color: colors.destructive,
       count: 1, size: mediaBreakdown.appCache.size,
-      action: () => router.push('/app-cache'),
-      actionLabel: 'CLEAN →',
+      action: () => router.push('/app-cache'), actionLabel: 'CLEAN →',
     },
   ] : [];
 
-  const totalMediaSize = categories.reduce((acc, c) => acc + c.size, 0);
+  const nonSubsetCats = categories.filter(c => !c.isSubset && c.key !== 'appCache');
+  const totalMediaSize = nonSubsetCats.reduce((acc, c) => acc + c.size, 0);
+
+  const recommendations = mediaBreakdown ? getRecommendation(mediaBreakdown) : [];
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -171,21 +242,32 @@ export default function StorageIntelScreen() {
         {storageStats && (
           <Animated.View entering={FadeIn} style={[styles.diskPanel, bevelRaised, { backgroundColor: colors.card }]}>
             <Text style={[styles.panelHead, { color: colors.primary }]}>{'[DISK STATUS]'}</Text>
-            <View style={styles.diskRow}>
-              <Text style={[styles.diskKey, { color: colors.mutedForeground }]}>TOTAL</Text>
-              <Text style={[styles.diskSep]}>{' = '}</Text>
-              <Text style={[styles.diskVal, { color: colors.foreground }]}>{formatBytes(total)}</Text>
-            </View>
-            <View style={styles.diskRow}>
-              <Text style={[styles.diskKey, { color: colors.mutedForeground }]}>USED</Text>
-              <Text style={[styles.diskSep]}>{' = '}</Text>
-              <Text style={[styles.diskVal, { color: colors.accent }]}>{formatBytes(used)}</Text>
-            </View>
-            <View style={styles.diskRow}>
-              <Text style={[styles.diskKey, { color: colors.mutedForeground }]}>FREE</Text>
-              <Text style={[styles.diskSep]}>{' = '}</Text>
-              <Text style={[styles.diskVal, { color: colors.success }]}>{formatBytes(free)}</Text>
-            </View>
+            {[
+              { key: 'TOTAL', val: formatBytes(total), color: colors.foreground, delta: null },
+              {
+                key: 'USED', val: formatBytes(used), color: colors.accent,
+                delta: prevSnap ? used - prevSnap.usedSpace : null,
+              },
+              {
+                key: 'FREE', val: formatBytes(free), color: colors.success,
+                delta: prevSnap ? free - prevSnap.freeSpace : null,
+              },
+            ].map(row => (
+              <View key={row.key} style={styles.diskRow}>
+                <Text style={[styles.diskKey, { color: colors.mutedForeground }]}>{row.key}</Text>
+                <Text style={styles.diskSep}>{' = '}</Text>
+                <Text style={[styles.diskVal, { color: row.color }]}>{row.val}</Text>
+                {row.delta !== null && Math.abs(row.delta) > 100_000 && (
+                  <Text style={[styles.diskDelta, {
+                    color: row.key === 'USED'
+                      ? (row.delta > 0 ? colors.destructive : colors.success)
+                      : (row.delta > 0 ? colors.success : colors.destructive),
+                  }]}>
+                    {' '}{formatDelta(row.delta)}
+                  </Text>
+                )}
+              </View>
+            ))}
             <View style={{ marginTop: 10, gap: 4 }}>
               <SegBar value={used / total} color={colors.accent} total={30} />
               <View style={styles.barLegend}>
@@ -201,6 +283,11 @@ export default function StorageIntelScreen() {
                     FREE {Math.round((free / total) * 100)}%
                   </Text>
                 </View>
+                {prevSnap && (
+                  <Text style={[styles.legendText, { color: colors.mutedForeground }]}>
+                    vs {daysAgo(prevSnap.timestamp)}
+                  </Text>
+                )}
               </View>
             </View>
           </Animated.View>
@@ -223,7 +310,7 @@ export default function StorageIntelScreen() {
           </Pressable>
         )}
 
-        {/* ── Scanning state ── */}
+        {/* ── Scanning ── */}
         {scanning && (
           <Animated.View entering={FadeIn} style={[styles.scanPanel, bevelRaised, { backgroundColor: colors.card }]}>
             <Text style={[styles.scanTitle, { color: colors.primary }]}>{'[ANALYSING...]'}</Text>
@@ -241,10 +328,21 @@ export default function StorageIntelScreen() {
             {/* Last scanned */}
             {mediaBreakdown.lastScanned && (
               <Text style={[styles.lastScanned, { color: colors.mutedForeground }]}>
-                {'> LAST SCANNED: '}{formatDate(mediaBreakdown.lastScanned).toUpperCase()}
+                {'> LAST SCANNED: '}{formatDate(mediaBreakdown.lastScanned)}
                 {'  ·  '}{mediaBreakdown.totalScanned} ITEMS
+                {prevSnap && `  ·  PREV: ${daysAgo(prevSnap.timestamp)}`}
               </Text>
             )}
+
+            {/* Recommendations */}
+            <View style={[styles.recoPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <Text style={[styles.panelHead, { color: colors.primary }]}>{'[RECOMMENDATIONS]'}</Text>
+              {recommendations.map((r, i) => (
+                <Text key={i} style={[styles.recoLine, { color: colors.mutedForeground }]}>
+                  {'> '}{r}
+                </Text>
+              ))}
+            </View>
 
             {/* Category list */}
             <View style={[styles.catPanel, bevelRaised, { backgroundColor: colors.card }]}>
@@ -253,52 +351,96 @@ export default function StorageIntelScreen() {
                 <Text style={[styles.estNote, { color: colors.mutedForeground }]}>{' · sizes estimated'}</Text>
               </Text>
 
-              {categories.map((cat, idx) => (
-                <View
-                  key={cat.key}
-                  style={[
-                    styles.catRow,
-                    idx < categories.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
-                  ]}
-                >
-                  <View style={[styles.catIconBox, { borderColor: cat.color + '40' }]}>
-                    <Feather name={cat.icon} size={13} color={cat.color} />
-                  </View>
-                  <View style={styles.catInfo}>
-                    <View style={styles.catTopRow}>
-                      <Text style={[styles.catLabel, { color: colors.foreground }]}>{cat.label}</Text>
-                      {cat.action && (
-                        <Pressable onPress={cat.action}>
-                          <Text style={[styles.catAction, { color: cat.color }]}>{cat.actionLabel}</Text>
-                        </Pressable>
+              {categories.map((cat, idx) => {
+                const delta = (cat.prevSize !== undefined && cat.prevSize !== null)
+                  ? cat.size - cat.prevSize : null;
+                const share = totalMediaSize > 0 && !cat.isSubset ? cat.size / totalMediaSize : 0;
+                return (
+                  <View
+                    key={cat.key}
+                    style={[
+                      styles.catRow,
+                      idx < categories.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                      cat.isSubset && { opacity: 0.75 },
+                    ]}
+                  >
+                    <View style={[styles.catIconBox, { borderColor: cat.color + '40' }]}>
+                      <Feather name={cat.icon} size={13} color={cat.color} />
+                    </View>
+                    <View style={styles.catInfo}>
+                      <View style={styles.catTopRow}>
+                        <Text style={[styles.catLabel, { color: cat.isSubset ? colors.mutedForeground : colors.foreground }]}>
+                          {cat.label}
+                        </Text>
+                        <View style={styles.catTopRight}>
+                          {delta !== null && Math.abs(delta) > 500_000 && (
+                            <Text style={[styles.catDelta, {
+                              color: delta > 0 ? colors.destructive : colors.success,
+                            }]}>
+                              {formatDelta(delta)}{'  '}
+                            </Text>
+                          )}
+                          {cat.action && (
+                            <Pressable onPress={cat.action}>
+                              <Text style={[styles.catAction, { color: cat.color }]}>{cat.actionLabel}</Text>
+                            </Pressable>
+                          )}
+                        </View>
+                      </View>
+                      <View style={styles.catBottomRow}>
+                        {cat.key !== 'appCache' && (
+                          <Text style={[styles.catCount, { color: colors.mutedForeground }]}>
+                            {cat.count.toLocaleString()} items{cat.isSubset ? '*' : ''}{' · '}
+                          </Text>
+                        )}
+                        <Text style={[styles.catSize, { color: cat.color }]}>~{formatBytes(cat.size)}</Text>
+                      </View>
+                      {share > 0 && (
+                        <View style={{ marginTop: 5 }}>
+                          <SegBar value={share} color={cat.color} total={20} />
+                        </View>
                       )}
                     </View>
-                    <View style={styles.catBottomRow}>
-                      <Text style={[styles.catCount, { color: colors.mutedForeground }]}>
-                        {cat.key === 'appCache' ? '' : `${cat.count.toLocaleString()} items · `}
-                      </Text>
-                      <Text style={[styles.catSize, { color: cat.color }]}>~{formatBytes(cat.size)}</Text>
-                    </View>
-                    <View style={{ marginTop: 5 }}>
-                      <SegBar
-                        value={totalMediaSize > 0 ? cat.size / totalMediaSize : 0}
-                        color={cat.color}
-                        total={20}
-                      />
-                    </View>
                   </View>
-                </View>
-              ))}
+                );
+              })}
             </View>
 
             {/* Transparency note */}
             <View style={[styles.noteBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
               <Text style={[styles.noteTitle, { color: colors.primary }]}>{'[!] ABOUT THESE NUMBERS'}</Text>
               <Text style={[styles.noteText, { color: colors.mutedForeground }]}>
-                {'> '} Sizes are estimated from image dimensions and video duration. Android does not expose exact file sizes to third-party apps without root.{'\n'}
-                {'> '} DOWNLOADS* is a subset of Images+Videos — it is not additive. Bar proportions reflect share of total media only.
+                {'> '} Sizes estimated from image dimensions and video duration. Android does not expose exact file sizes to third-party apps without root.{'\n'}
+                {'> '} DOWNLOADS* is a subset of Images+Videos — not additive. Bar proportions show share of total media only.
               </Text>
             </View>
+
+            {/* Snapshot history */}
+            {snapshots.length > 1 && (
+              <View style={{ gap: 6 }}>
+                <Text style={[styles.lastScanned, { color: colors.mutedForeground }]}>
+                  {'── SCAN HISTORY ──────────────────────'}
+                </Text>
+                <View style={[styles.snapPanel, bevelRaised, { backgroundColor: colors.card }]}>
+                  {snapshots.slice(0, 5).map((snap, idx) => (
+                    <View
+                      key={snap.id}
+                      style={[
+                        styles.snapRow,
+                        idx < Math.min(snapshots.length, 5) - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                      ]}
+                    >
+                      <Text style={[styles.snapDate, { color: colors.mutedForeground }]}>
+                        {formatDate(snap.timestamp)}
+                      </Text>
+                      <Text style={[styles.snapUsed, { color: colors.accent }]}>
+                        {formatBytes(snap.usedSpace)} used
+                      </Text>
+                    </View>
+                  ))}
+                </View>
+              </View>
+            )}
           </Animated.View>
         )}
 
@@ -332,11 +474,12 @@ const styles = StyleSheet.create({
   diskPanel: { padding: 14, gap: 6 },
   panelHead: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 6 },
   estNote: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
-  diskRow: { flexDirection: 'row' },
+  diskRow: { flexDirection: 'row', alignItems: 'center' },
   diskKey: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, width: 60 },
   diskSep: { fontSize: 11, fontFamily: 'Inter_400Regular', color: '#444' },
   diskVal: { fontSize: 11, fontFamily: 'Inter_700Bold' },
-  barLegend: { flexDirection: 'row', gap: 16, marginTop: 4 },
+  diskDelta: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+  barLegend: { flexDirection: 'row', gap: 12, marginTop: 4, flexWrap: 'wrap' },
   legendItem: { flexDirection: 'row', alignItems: 'center', gap: 5 },
   legendDot: { width: 8, height: 8 },
   legendText: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
@@ -355,12 +498,17 @@ const styles = StyleSheet.create({
 
   lastScanned: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
 
+  recoPanel: { padding: 14, gap: 6 },
+  recoLine: { fontSize: 11, fontFamily: 'Inter_400Regular', lineHeight: 18 },
+
   catPanel: { overflow: 'hidden' },
   catRow: { flexDirection: 'row', alignItems: 'flex-start', padding: 12, gap: 10 },
   catIconBox: { width: 30, height: 30, borderWidth: 1, alignItems: 'center', justifyContent: 'center', marginTop: 2 },
   catInfo: { flex: 1, gap: 2 },
   catTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   catLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  catTopRight: { flexDirection: 'row', alignItems: 'center' },
+  catDelta: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
   catAction: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
   catBottomRow: { flexDirection: 'row', alignItems: 'center' },
   catCount: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
@@ -369,6 +517,11 @@ const styles = StyleSheet.create({
   noteBox: { borderWidth: 1, padding: 12, gap: 6 },
   noteTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },
   noteText: { fontSize: 10, fontFamily: 'Inter_400Regular', lineHeight: 16 },
+
+  snapPanel: { overflow: 'hidden' },
+  snapRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', padding: 10 },
+  snapDate: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+  snapUsed: { fontSize: 10, fontFamily: 'Inter_700Bold' },
 
   emptyPanel: { padding: 32, alignItems: 'center', gap: 8 },
   emptyIcon: { fontSize: 22, fontFamily: 'Inter_700Bold', letterSpacing: 4 },

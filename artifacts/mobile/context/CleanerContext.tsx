@@ -22,7 +22,7 @@ export interface StorageStats {
   totalSpace: number;
   usedSpace: number;
   freeSpace: number;
-  /** Bytes of own app cache — real, not estimated */
+  /** Bytes of own app cache — real, from FileSystem.getInfoAsync */
   appCacheSize: number;
 }
 
@@ -34,9 +34,24 @@ export interface MediaBreakdown {
   downloads: { count: number; size: number };
   appCache: { size: number };
   totalScanned: number;
-  /** Sizes are estimates derived from dimensions/duration — not exact file sizes */
+  /** Sizes derived from dimensions/duration — not exact */
   sizesAreEstimated: true;
   lastScanned: string | null;
+}
+
+/** Snapshot of storage state at a point in time — used for trend comparison */
+export interface ScanSnapshot {
+  id: string;
+  timestamp: string;
+  totalSpace: number;
+  usedSpace: number;
+  freeSpace: number;
+  appCacheSize: number;
+  mediaItemCount: number;
+  imageSize: number;
+  videoSize: number;
+  audioSize: number;
+  screenshotSize: number;
 }
 
 /** Estimate image bytes from dimensions (JPEG ~20:1 compression from raw RGB) */
@@ -54,10 +69,21 @@ export function estimateAudioSize(durationSeconds: number): number {
   return Math.round(Math.max(1, durationSeconds) * 128_000 / 8);
 }
 
+/** Try to get real file size from a local URI. Returns null on failure. */
+export async function getRealFileSize(uri: string): Promise<number | null> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const info = await FileSystem.getInfoAsync(uri, { size: true } as any);
+    if (info.exists) return (info as any).size ?? null;
+  } catch {}
+  return null;
+}
+
 interface CleanerContextType {
   storageStats: StorageStats | null;
   isLoadingStats: boolean;
   mediaBreakdown: MediaBreakdown | null;
+  snapshots: ScanSnapshot[];
   history: CleanHistoryItem[];
   totalBytesFreed: number;
   scheduleSettings: ScheduleSettings;
@@ -67,6 +93,7 @@ interface CleanerContextType {
     onProgress?: (pct: number) => void,
     onLog?: (msg: string) => void
   ) => Promise<MediaBreakdown | null>;
+  addScanSnapshot: (snap: Omit<ScanSnapshot, 'id'>) => Promise<void>;
   addHistoryItem: (item: Omit<CleanHistoryItem, 'id'>) => Promise<void>;
   updateSchedule: (settings: Partial<ScheduleSettings>) => Promise<void>;
   setRootEnabled: (enabled: boolean) => Promise<void>;
@@ -79,6 +106,7 @@ const STORAGE_KEYS = {
   SCHEDULE: 'cleandroid_schedule',
   ROOT: 'cleandroid_root',
   TOTAL_FREED: 'cleandroid_total_freed',
+  SNAPSHOTS: 'cleandroid_snapshots',
 };
 
 const DEFAULT_SCHEDULE: ScheduleSettings = {
@@ -87,7 +115,6 @@ const DEFAULT_SCHEDULE: ScheduleSettings = {
   lastRun: null,
 };
 
-/** Get real own-cache directory size */
 async function getOwnCacheSize(): Promise<number> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -101,6 +128,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [isLoadingStats, setIsLoadingStats] = useState(true);
   const [mediaBreakdown, setMediaBreakdown] = useState<MediaBreakdown | null>(null);
+  const [snapshots, setSnapshots] = useState<ScanSnapshot[]>([]);
   const [history, setHistory] = useState<CleanHistoryItem[]>([]);
   const [totalBytesFreed, setTotalBytesFreed] = useState(0);
   const [scheduleSettings, setScheduleSettings] = useState<ScheduleSettings>(DEFAULT_SCHEDULE);
@@ -114,10 +142,8 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
         FileSystem.getTotalDiskCapacityAsync(),
         getOwnCacheSize(),
       ]);
-      const usedSpace = totalSpace - freeSpace;
-      setStorageStats({ totalSpace, usedSpace, freeSpace, appCacheSize });
+      setStorageStats({ totalSpace, usedSpace: totalSpace - freeSpace, freeSpace, appCacheSize });
     } catch {
-      // Fallback demo data if device API unavailable (web preview)
       const total = 64 * 1024 * 1024 * 1024;
       const used = 42 * 1024 * 1024 * 1024;
       setStorageStats({ totalSpace: total, usedSpace: used, freeSpace: total - used, appCacheSize: 0 });
@@ -126,7 +152,6 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
-  /** Scan MediaLibrary for real storage breakdown by category */
   const scanMediaLibrary = useCallback(async (
     onProgress?: (pct: number) => void,
     onLog?: (msg: string) => void
@@ -144,7 +169,6 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
     onLog?.('loading media library...');
 
     try {
-      // Load all assets in batches
       let allAssets: MediaLibrary.Asset[] = [];
       let after: string | undefined;
       let batchNum = 0;
@@ -168,13 +192,10 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       } while (after && allAssets.length < 3000);
 
       onProgress?.(50);
-      onLog?.('finding screenshots album...');
+      onLog?.('finding albums...');
 
-      // Find Screenshots + Downloads albums
       const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
-      const screenshotAlbum = albums.find(a =>
-        a.title.toLowerCase().includes('screenshot')
-      );
+      const screenshotAlbum = albums.find(a => a.title.toLowerCase().includes('screenshot'));
       const downloadAlbum = albums.find(a =>
         a.title.toLowerCase() === 'download' || a.title.toLowerCase() === 'downloads'
       );
@@ -183,10 +204,9 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       let downloadIds = new Set<string>();
 
       if (screenshotAlbum) {
-        onLog?.(`scanning Screenshots album (${screenshotAlbum.assetCount} items)...`);
+        onLog?.(`scanning Screenshots album...`);
         const ssAssets = await MediaLibrary.getAssetsAsync({
-          first: 2000,
-          album: screenshotAlbum,
+          first: 2000, album: screenshotAlbum,
           mediaType: [MediaLibrary.MediaType.photo],
         });
         ssAssets.assets.forEach(a => screenshotIds.add(a.id));
@@ -195,10 +215,9 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       onProgress?.(70);
 
       if (downloadAlbum) {
-        onLog?.(`scanning Downloads album (${downloadAlbum.assetCount} items)...`);
+        onLog?.(`scanning Downloads album...`);
         const dlAssets = await MediaLibrary.getAssetsAsync({
-          first: 1000,
-          album: downloadAlbum,
+          first: 1000, album: downloadAlbum,
         });
         dlAssets.assets.forEach(a => downloadIds.add(a.id));
       }
@@ -206,7 +225,6 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       onProgress?.(85);
       onLog?.('calculating storage usage...');
 
-      // Categorize and size all assets
       const breakdown: MediaBreakdown = {
         images: { count: 0, size: 0 },
         videos: { count: 0, size: 0 },
@@ -232,26 +250,18 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
             breakdown.images.count++;
             breakdown.images.size += size;
           }
-          if (isDownload) {
-            breakdown.downloads.count++;
-            breakdown.downloads.size += size;
-          }
+          if (isDownload) { breakdown.downloads.count++; breakdown.downloads.size += size; }
         } else if (asset.mediaType === MediaLibrary.MediaType.video) {
           const size = estimateVideoSize(asset.duration);
           breakdown.videos.count++;
           breakdown.videos.size += size;
-          if (isDownload) {
-            breakdown.downloads.count++;
-            breakdown.downloads.size += size;
-          }
+          if (isDownload) { breakdown.downloads.count++; breakdown.downloads.size += size; }
         } else if (asset.mediaType === MediaLibrary.MediaType.audio) {
-          const size = estimateAudioSize(asset.duration);
           breakdown.audio.count++;
-          breakdown.audio.size += size;
+          breakdown.audio.size += estimateAudioSize(asset.duration);
         }
       }
 
-      // Real own app cache size
       breakdown.appCache.size = await getOwnCacheSize();
 
       onProgress?.(100);
@@ -265,18 +275,32 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
     }
   }, []);
 
+  const addScanSnapshot = useCallback(async (snap: Omit<ScanSnapshot, 'id'>) => {
+    const newSnap: ScanSnapshot = {
+      ...snap,
+      id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
+    };
+    setSnapshots(prev => {
+      const updated = [newSnap, ...prev].slice(0, 30);
+      AsyncStorage.setItem(STORAGE_KEYS.SNAPSHOTS, JSON.stringify(updated));
+      return updated;
+    });
+  }, []);
+
   const loadPersisted = useCallback(async () => {
     try {
-      const [histRaw, schedRaw, rootRaw, freedRaw] = await Promise.all([
+      const [histRaw, schedRaw, rootRaw, freedRaw, snapsRaw] = await Promise.all([
         AsyncStorage.getItem(STORAGE_KEYS.HISTORY),
         AsyncStorage.getItem(STORAGE_KEYS.SCHEDULE),
         AsyncStorage.getItem(STORAGE_KEYS.ROOT),
         AsyncStorage.getItem(STORAGE_KEYS.TOTAL_FREED),
+        AsyncStorage.getItem(STORAGE_KEYS.SNAPSHOTS),
       ]);
       if (histRaw) setHistory(JSON.parse(histRaw));
       if (schedRaw) setScheduleSettings(JSON.parse(schedRaw));
       if (rootRaw) setRootEnabledState(rootRaw === 'true');
       if (freedRaw) setTotalBytesFreed(Number(freedRaw));
+      if (snapsRaw) setSnapshots(JSON.parse(snapsRaw));
     } catch {}
   }, []);
 
@@ -317,22 +341,12 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   return (
-    <CleanerContext.Provider
-      value={{
-        storageStats,
-        isLoadingStats,
-        mediaBreakdown,
-        history,
-        totalBytesFreed,
-        scheduleSettings,
-        rootEnabled,
-        refreshStats,
-        scanMediaLibrary,
-        addHistoryItem,
-        updateSchedule,
-        setRootEnabled,
-      }}
-    >
+    <CleanerContext.Provider value={{
+      storageStats, isLoadingStats, mediaBreakdown, snapshots,
+      history, totalBytesFreed, scheduleSettings, rootEnabled,
+      refreshStats, scanMediaLibrary, addScanSnapshot,
+      addHistoryItem, updateSchedule, setRootEnabled,
+    }}>
       {children}
     </CleanerContext.Provider>
   );

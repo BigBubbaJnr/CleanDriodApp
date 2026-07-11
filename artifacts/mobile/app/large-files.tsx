@@ -1,4 +1,14 @@
-import React, { useCallback, useEffect, useState } from 'react';
+/**
+ * Large File Scanner — real MediaLibrary scanning, no demo data.
+ *
+ * Phase 1 (fast): paginate all photos + videos, estimate sizes from
+ *   dimensions/duration, sort descending, keep top 200.
+ * Phase 2 (accurate): call FileSystem.getInfoAsync on top 30 items to get
+ *   real file sizes; replace estimates for those entries.
+ *
+ * Per-file info shown: name, size (real/est), type, age, recommendation.
+ */
+import React, { useCallback, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -10,24 +20,14 @@ import {
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
-import { useCleaner } from '@/context/CleanerContext';
+import { useCleaner, estimateImageSize, estimateVideoSize, getRealFileSize } from '@/context/CleanerContext';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-interface LargeFile {
-  id: string;
-  assetId: string;
-  name: string;
-  size: number;
-  type: 'image' | 'video' | 'audio' | 'doc' | 'apk' | 'other';
-  uri: string;
-  selected: boolean;
-}
-
-type FilterType = 'all' | 'image' | 'video' | 'audio' | 'doc';
+// ── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatBytes(bytes: number): string {
   if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
@@ -35,41 +35,72 @@ function formatBytes(bytes: number): string {
   return (bytes / 1024).toFixed(0) + ' KB';
 }
 
-const TYPE_ICONS: Record<string, keyof typeof Feather.glyphMap> = {
-  image: 'image', video: 'film', audio: 'music', doc: 'file-text', apk: 'package', other: 'file',
+function getAgeText(creationTimeSecs: number): string {
+  const days = Math.floor((Date.now() - creationTimeSecs * 1000) / 86_400_000);
+  if (days < 1) return 'TODAY';
+  if (days === 1) return 'YESTERDAY';
+  if (days < 7) return `${days}D AGO`;
+  if (days < 30) return `${Math.floor(days / 7)}W AGO`;
+  if (days < 365) return `${Math.floor(days / 30)}MO AGO`;
+  const y = Math.floor(days / 365);
+  const m = Math.floor((days % 365) / 30);
+  return m > 0 ? `${y}Y ${m}MO AGO` : `${y}Y AGO`;
+}
+
+function getRecommendation(type: LargeFileType, ageDays: number, sizeBytes: number): string {
+  const mb = sizeBytes / (1024 * 1024);
+  if (type === 'video') {
+    if (ageDays > 365) return 'Old video — likely safe to remove';
+    if (ageDays > 180) return 'Over 6 months old — review for archiving';
+    if (ageDays > 90) return 'Over 3 months old — consider reviewing';
+    if (mb > 1024) return 'Very large — back up to cloud first';
+    return 'Recent video — keep if needed';
+  }
+  if (type === 'image') {
+    if (ageDays > 365) return 'Old photo — consider cloud archiving';
+    if (mb > 15) return 'High-resolution / RAW image';
+    return 'Large photo';
+  }
+  if (type === 'audio') {
+    if (ageDays > 180) return 'Old recording — review if still needed';
+    return 'Large audio file';
+  }
+  return 'Large file — review if still needed';
+}
+
+// ── Types ────────────────────────────────────────────────────────────────────
+
+type LargeFileType = 'image' | 'video' | 'audio';
+type FilterType = 'all' | 'image' | 'video' | 'audio';
+
+interface LargeFile {
+  id: string;
+  assetId: string;
+  name: string;
+  size: number;
+  sizeIsReal: boolean;
+  type: LargeFileType;
+  uri: string;
+  creationTime: number;   // seconds
+  ageText: string;
+  ageDays: number;
+  recommendation: string;
+  selected: boolean;
+}
+
+const TYPE_ICONS: Record<LargeFileType, keyof typeof Feather.glyphMap> = {
+  image: 'image', video: 'film', audio: 'music',
 };
 
-// Retro accent per type — all desaturated/terminal-style
-const TYPE_COLORS: Record<string, string> = {
-  image: '#00E5CC',   // primary teal
-  video: '#FF5500',   // accent orange
-  audio: '#FFB800',   // amber
-  doc:   '#39FF14',   // neon green
-  apk:   '#FF5500',   // orange
-  other: '#444444',   // dim
+const TYPE_COLORS: Record<LargeFileType, string> = {
+  image: '#00E5CC', video: '#FF5500', audio: '#FFB800',
 };
-
-const DEMO_FILES: LargeFile[] = [
-  { id: '1', assetId: '', name: 'Family_Vacation_2024.mp4', size: 2.1 * 1024 * 1024 * 1024, type: 'video', uri: '', selected: false },
-  { id: '2', assetId: '', name: 'backup_full_2023.zip', size: 890 * 1024 * 1024, type: 'other', uri: '', selected: false },
-  { id: '3', assetId: '', name: 'concert_video.mp4', size: 744 * 1024 * 1024, type: 'video', uri: '', selected: false },
-  { id: '4', assetId: '', name: 'old_photos_archive.zip', size: 512 * 1024 * 1024, type: 'other', uri: '', selected: false },
-  { id: '5', assetId: '', name: 'Netflix_download.mp4', size: 480 * 1024 * 1024, type: 'video', uri: '', selected: false },
-  { id: '6', assetId: '', name: 'WhatsApp.apk', size: 48 * 1024 * 1024, type: 'apk', uri: '', selected: false },
-  { id: '7', assetId: '', name: 'presentation.pptx', size: 38 * 1024 * 1024, type: 'doc', uri: '', selected: false },
-  { id: '8', assetId: '', name: 'IMG_20240615_RAW.jpg', size: 24 * 1024 * 1024, type: 'image', uri: '', selected: false },
-  { id: '9', assetId: '', name: 'podcast_episode_long.mp3', size: 89 * 1024 * 1024, type: 'audio', uri: '', selected: false },
-  { id: '10', assetId: '', name: 'screencap_4k.png', size: 18 * 1024 * 1024, type: 'image', uri: '', selected: false },
-  { id: '11', assetId: '', name: 'report_annual.pdf', size: 15 * 1024 * 1024, type: 'doc', uri: '', selected: false },
-  { id: '12', assetId: '', name: 'voice_memo_2h.m4a', size: 122 * 1024 * 1024, type: 'audio', uri: '', selected: false },
-];
 
 const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'all', label: 'ALL' },
   { key: 'video', label: 'VIDEO' },
   { key: 'image', label: 'IMG' },
   { key: 'audio', label: 'AUDIO' },
-  { key: 'doc', label: 'DOCS' },
 ];
 
 function SegBar({ value, color, total = 24 }: { value: number; color: string; total?: number }) {
@@ -84,27 +115,7 @@ function SegBar({ value, color, total = 24 }: { value: number; color: string; to
   );
 }
 
-function ScanTicker({ active }: { active: boolean }) {
-  const colors = useColors();
-  const lines = [
-    'enumerating /sdcard/DCIM...',
-    'scanning /sdcard/Download...',
-    'reading video library...',
-    'checking audio files...',
-    'sorting by size desc...',
-  ];
-  const [idx, setIdx] = useState(0);
-  useEffect(() => {
-    if (!active) return;
-    const id = setInterval(() => setIdx(i => (i + 1) % lines.length), 550);
-    return () => clearInterval(id);
-  }, [active]);
-  return (
-    <Text style={[styles.tickerLine, { color: colors.mutedForeground }]} numberOfLines={1}>
-      {'> '}{lines[idx]}
-    </Text>
-  );
-}
+// ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function LargeFilesScreen() {
   const colors = useColors();
@@ -115,48 +126,124 @@ export default function LargeFilesScreen() {
   const [files, setFiles] = useState<LargeFile[]>([]);
   const [filter, setFilter] = useState<FilterType>('all');
   const [scanProgress, setScanProgress] = useState(0);
+  const [scanStatus, setScanStatus] = useState('');
   const [bytesFreed, setBytesFreed] = useState(0);
 
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
-
   const accentAmber = colors.warning;
 
   const startScan = useCallback(async () => {
     setPhase('scanning');
     setScanProgress(0);
+    setScanStatus('initialising...');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
-    let realFiles: LargeFile[] = [];
-
-    if (Platform.OS !== 'web') {
-      const { status } = await MediaLibrary.requestPermissionsAsync();
-      if (status === 'granted') {
-        setScanProgress(20);
-        try {
-          const [photos, videos] = await Promise.all([
-            MediaLibrary.getAssetsAsync({ first: 200, sortBy: [MediaLibrary.SortBy.creationTime], mediaType: [MediaLibrary.MediaType.photo] }),
-            MediaLibrary.getAssetsAsync({ first: 100, sortBy: [MediaLibrary.SortBy.creationTime], mediaType: [MediaLibrary.MediaType.video] }),
-          ]);
-          setScanProgress(60);
-          for (const a of photos.assets) {
-            const size = a.width * a.height * 3;
-            if (size > 5 * 1024 * 1024) realFiles.push({ id: a.id, assetId: a.id, name: a.filename, size, type: 'image', uri: a.uri, selected: false });
-          }
-          for (const a of videos.assets) {
-            const size = a.duration * 2 * 1024 * 1024;
-            if (size > 10 * 1024 * 1024) realFiles.push({ id: a.id, assetId: a.id, name: a.filename, size, type: 'video', uri: a.uri, selected: false });
-          }
-          realFiles.sort((a, b) => b.size - a.size);
-        } catch {}
-      }
+    if (Platform.OS === 'web') {
+      setScanStatus('media library unavailable in browser');
+      setScanProgress(100);
+      setFiles([]);
+      setPhase('results');
+      return;
     }
 
-    setScanProgress(90);
-    if (realFiles.length < 5) realFiles = [...realFiles, ...DEMO_FILES].slice(0, 20);
+    setScanStatus('requesting media access...');
+    const { status } = await MediaLibrary.requestPermissionsAsync();
+    if (status !== 'granted') {
+      setScanStatus('[!] permission denied');
+      setScanProgress(100);
+      setFiles([]);
+      setPhase('results');
+      return;
+    }
+
+    // ── Phase 1: paginate all photos and videos ──────────────────────────────
+    setScanStatus('loading photo library...');
+    let allFiles: LargeFile[] = [];
+    const now = Date.now();
+
+    // Photos
+    let photoCursor: string | undefined;
+    do {
+      const page = await MediaLibrary.getAssetsAsync({
+        first: 500,
+        after: photoCursor,
+        mediaType: [MediaLibrary.MediaType.photo],
+        sortBy: [MediaLibrary.SortBy.creationTime],
+      });
+      for (const a of page.assets) {
+        const size = estimateImageSize(a.width, a.height);
+        if (size < 1_000_000) continue; // skip < 1 MB
+        const ageDays = Math.floor((now - a.creationTime * 1000) / 86_400_000);
+        allFiles.push({
+          id: a.id, assetId: a.id, name: a.filename, size, sizeIsReal: false,
+          type: 'image', uri: a.uri, creationTime: a.creationTime,
+          ageText: getAgeText(a.creationTime), ageDays,
+          recommendation: getRecommendation('image', ageDays, size),
+          selected: false,
+        });
+      }
+      photoCursor = page.hasNextPage ? page.endCursor : undefined;
+      setScanProgress(Math.min(35, 10 + Math.floor(allFiles.length / 20)));
+    } while (photoCursor && allFiles.length < 5000);
+
+    setScanStatus('loading video library...');
+    setScanProgress(40);
+
+    // Videos
+    let videoCursor: string | undefined;
+    let videoCount = 0;
+    do {
+      const page = await MediaLibrary.getAssetsAsync({
+        first: 500,
+        after: videoCursor,
+        mediaType: [MediaLibrary.MediaType.video],
+        sortBy: [MediaLibrary.SortBy.creationTime],
+      });
+      for (const a of page.assets) {
+        const size = estimateVideoSize(a.duration);
+        if (size < 10_000_000) continue; // skip < 10 MB
+        const ageDays = Math.floor((now - a.creationTime * 1000) / 86_400_000);
+        allFiles.push({
+          id: `v_${a.id}`, assetId: a.id, name: a.filename, size, sizeIsReal: false,
+          type: 'video', uri: a.uri, creationTime: a.creationTime,
+          ageText: getAgeText(a.creationTime), ageDays,
+          recommendation: getRecommendation('video', ageDays, size),
+          selected: false,
+        });
+        videoCount++;
+      }
+      videoCursor = page.hasNextPage ? page.endCursor : undefined;
+      setScanProgress(Math.min(65, 40 + Math.floor(videoCount / 10)));
+    } while (videoCursor && allFiles.length < 10000);
+
+    // Sort by size descending
+    allFiles.sort((a, b) => b.size - a.size);
+    const top200 = allFiles.slice(0, 200);
+    setScanProgress(70);
+
+    // ── Phase 2: real sizes for top 30 ──────────────────────────────────────
+    setScanStatus('measuring top files...');
+    const top30 = top200.slice(0, 30);
+    const realSizes = await Promise.all(
+      top30.map(f => getRealFileSize(f.uri))
+    );
+    top30.forEach((f, i) => {
+      if (realSizes[i] !== null && realSizes[i]! > 0) {
+        f.size = realSizes[i]!;
+        f.sizeIsReal = true;
+        // Recompute recommendation with real size
+        f.recommendation = getRecommendation(f.type, f.ageDays, f.size);
+      }
+    });
+
+    // Re-sort top 200 after real sizes (top 30 may have shifted)
+    top200.sort((a, b) => b.size - a.size);
     setScanProgress(100);
-    await new Promise(r => setTimeout(r, 300));
-    setFiles(realFiles);
+    setScanStatus(`found ${top200.length} large file${top200.length !== 1 ? 's' : ''}`);
+
+    await new Promise(r => setTimeout(r, 200));
+    setFiles(top200);
     setPhase('results');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, []);
@@ -167,25 +254,34 @@ export default function LargeFilesScreen() {
   const filtered = files.filter(f => filter === 'all' || f.type === filter);
   const selected = files.filter(f => f.selected);
   const selectedSize = selected.reduce((acc, f) => acc + f.size, 0);
+  const realCount = files.filter(f => f.sizeIsReal).length;
 
   const handleDelete = async () => {
     if (selected.length === 0) return;
     setPhase('cleaning');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    if (Platform.OS !== 'web') {
+
+    let bytesActuallyFreed = 0;
+    let itemsRemoved = 0;
+    const ids = selected.filter(f => f.assetId).map(f => f.assetId);
+    if (ids.length > 0 && Platform.OS !== 'web') {
       try {
-        const ids = selected.filter(f => f.assetId).map(f => f.assetId);
-        if (ids.length > 0) await MediaLibrary.deleteAssetsAsync(ids);
+        await MediaLibrary.deleteAssetsAsync(ids);
+        bytesActuallyFreed = selectedSize;
+        itemsRemoved = selected.length;
       } catch {}
     }
-    await new Promise(r => setTimeout(r, 1400));
-    setBytesFreed(selectedSize);
-    await addHistoryItem({
-      date: new Date().toISOString(),
-      bytesFreed: selectedSize,
-      type: 'large_files',
-      label: `Large Files — ${selected.length} files removed`,
-    });
+
+    await new Promise(r => setTimeout(r, 800));
+    setBytesFreed(bytesActuallyFreed);
+    if (bytesActuallyFreed > 0 || itemsRemoved > 0) {
+      await addHistoryItem({
+        date: new Date().toISOString(),
+        bytesFreed: bytesActuallyFreed,
+        type: 'large_files',
+        label: `Large Files — ${itemsRemoved} file${itemsRemoved !== 1 ? 's' : ''} removed`,
+      });
+    }
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
@@ -214,7 +310,7 @@ export default function LargeFilesScreen() {
         <View style={{ width: 48 }} />
       </View>
 
-      {/* ── Filter bar (results only) ── */}
+      {/* ── Filter bar ── */}
       {phase === 'results' && (
         <View style={[styles.filterBar, { backgroundColor: colors.background, borderBottomColor: colors.border }]}>
           <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.filterScroll}>
@@ -227,19 +323,16 @@ export default function LargeFilesScreen() {
                     styles.filterChip,
                     active
                       ? {
-                          backgroundColor: colors.primary,
+                          backgroundColor: accentAmber,
                           borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
                           borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
                           borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
                         }
-                      : {
-                          backgroundColor: colors.card,
-                          ...bevelRaised,
-                        },
+                      : { backgroundColor: colors.card, ...bevelRaised },
                   ]}
                   onPress={() => { setFilter(f.key); Haptics.selectionAsync(); }}
                 >
-                  <Text style={[styles.filterLabel, { color: active ? colors.primaryForeground : colors.mutedForeground }]}>
+                  <Text style={[styles.filterLabel, { color: active ? '#000' : colors.mutedForeground }]}>
                     {f.label}
                   </Text>
                 </Pressable>
@@ -260,10 +353,20 @@ export default function LargeFilesScreen() {
               <Feather name="hard-drive" size={44} color={accentAmber} />
             </View>
             <Text style={[styles.idleTitle, { color: colors.foreground }]}>LARGE FILE SCANNER</Text>
-            <View style={[styles.idleInfoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
-              <Text style={[styles.idleInfoLine, { color: colors.mutedForeground }]}>{'> '} Ranks files by size, largest first</Text>
-              <Text style={[styles.idleInfoLine, { color: colors.mutedForeground }]}>{'> '} Filter by video / image / audio / doc</Text>
-              <Text style={[styles.idleInfoLine, { color: colors.mutedForeground }]}>{'> '} Select and delete in one tap</Text>
+            <View style={[styles.infoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
+              <Text style={[styles.infoTitle, { color: accentAmber }]}>{'[SCAN METHOD]'}</Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                {'[+] '} Scans all photos and videos via MediaLibrary
+              </Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                {'[+] '} Real sizes measured for top 30 files
+              </Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                {'[+] '} Age and safety recommendation per file
+              </Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                {'[i] '} Remaining sizes estimated from dimensions
+              </Text>
             </View>
             <Pressable onPress={startScan} style={styles.fullWidth}>
               <View style={[styles.primaryBtn, {
@@ -282,59 +385,102 @@ export default function LargeFilesScreen() {
         {/* ── SCANNING ── */}
         {phase === 'scanning' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.scanningBox, bevelRaised, { backgroundColor: colors.card }]}>
-              <Text style={[styles.scanningTitle, { color: accentAmber }]}>{'[SCANNING...]'}</Text>
-              <Text style={[styles.scanningPct, { color: accentAmber }]}>
+            <View style={[styles.scanBox, bevelRaised, { backgroundColor: colors.card }]}>
+              <Text style={[styles.scanTitle, { color: accentAmber }]}>{'[SCANNING...]'}</Text>
+              <Text style={[styles.scanPct, { color: accentAmber }]}>
                 {String(scanProgress).padStart(3, '0')}%
               </Text>
               <SegBar value={scanProgress / 100} color={accentAmber} />
-              <ScanTicker active />
+              <Text style={[styles.scanStatus, { color: colors.mutedForeground }]}>{'> '}{scanStatus}</Text>
             </View>
           </Animated.View>
         )}
 
-        {/* ── RESULTS / CLEANING ── */}
+        {/* ── RESULTS ── */}
         {(phase === 'results' || phase === 'cleaning') && (
           <Animated.View entering={FadeIn} style={{ gap: 8 }}>
             {/* Count bar */}
             <View style={[styles.countPanel, bevelRaised, { backgroundColor: colors.card }]}>
-              <Text style={[styles.countText, { color: colors.mutedForeground }]}>
-                {'FILES: '}<Text style={{ color: colors.foreground }}>{filtered.length}</Text>
-                {'  |  SIZE: '}<Text style={{ color: accentAmber }}>{formatBytes(filtered.reduce((a, f) => a + f.size, 0))}</Text>
+              <View style={styles.countRow}>
+                <Text style={[styles.countKey, { color: colors.mutedForeground }]}>FILES</Text>
+                <Text style={[styles.countSep]}>{' = '}</Text>
+                <Text style={[styles.countVal, { color: colors.foreground }]}>{filtered.length}</Text>
+                <Text style={[styles.countKey, { color: colors.mutedForeground, marginLeft: 16 }]}>TOTAL</Text>
+                <Text style={[styles.countSep]}>{' = '}</Text>
+                <Text style={[styles.countVal, { color: accentAmber }]}>
+                  {formatBytes(filtered.reduce((a, f) => a + f.size, 0))}
+                </Text>
+              </View>
+              <Text style={[styles.countNote, { color: colors.mutedForeground }]}>
+                {realCount} real sizes · {Math.max(0, Math.min(filtered.length, 200) - realCount)} estimated
               </Text>
             </View>
 
+            {/* Empty state */}
+            {filtered.length === 0 && (
+              <View style={[styles.emptyPanel, bevelRaised, { backgroundColor: colors.card }]}>
+                <Text style={[styles.emptyText, { color: colors.success }]}>
+                  {filter === 'all' ? '[OK] NO LARGE FILES FOUND' : `[OK] NO ${filter.toUpperCase()} FILES`}
+                </Text>
+                <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
+                  {filter === 'all'
+                    ? 'No media files above the size threshold detected'
+                    : `No ${filter} files above threshold — try a different filter`
+                  }
+                </Text>
+              </View>
+            )}
+
             {/* File list */}
-            <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
-              {filtered.map((file, idx) => (
-                <Pressable
-                  key={file.id}
-                  style={[
-                    styles.fileRow,
-                    idx < filtered.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
-                    file.selected && { backgroundColor: colors.accent + '08' },
-                  ]}
-                  onPress={() => toggleFile(file.id)}
-                >
-                  {/* Type icon */}
-                  <View style={[styles.fileIconBox, { borderColor: TYPE_COLORS[file.type] + '50' }]}>
-                    <Feather name={TYPE_ICONS[file.type]} size={14} color={TYPE_COLORS[file.type]} />
-                  </View>
-                  {/* Info */}
-                  <View style={styles.fileInfo}>
-                    <Text style={[styles.fileName, { color: colors.foreground }]} numberOfLines={1}>{file.name}</Text>
-                    <Text style={[styles.fileSize, { color: TYPE_COLORS[file.type] }]}>{formatBytes(file.size)}</Text>
-                  </View>
-                  {/* Square checkbox */}
-                  <View style={[styles.checkbox, {
-                    backgroundColor: file.selected ? colors.accent : 'transparent',
-                    borderColor: file.selected ? colors.accent : colors.border,
-                  }]}>
-                    {file.selected && <Text style={styles.checkMark}>✓</Text>}
-                  </View>
-                </Pressable>
-              ))}
-            </View>
+            {filtered.length > 0 && (
+              <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
+                {filtered.map((file, idx) => (
+                  <Pressable
+                    key={file.id}
+                    style={[
+                      styles.fileRow,
+                      idx < filtered.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                      file.selected && { backgroundColor: colors.accent + '08' },
+                    ]}
+                    onPress={() => toggleFile(file.id)}
+                  >
+                    {/* Type icon */}
+                    <View style={[styles.fileIconBox, { borderColor: TYPE_COLORS[file.type] + '50' }]}>
+                      <Feather name={TYPE_ICONS[file.type]} size={14} color={TYPE_COLORS[file.type]} />
+                    </View>
+                    {/* Info */}
+                    <View style={styles.fileInfo}>
+                      <View style={styles.fileTopRow}>
+                        <Text style={[styles.fileName, { color: colors.foreground }]} numberOfLines={1}>
+                          {file.name}
+                        </Text>
+                        <Text style={[styles.fileSize, {
+                          color: file.selected ? colors.accent : TYPE_COLORS[file.type],
+                        }]}>
+                          {file.sizeIsReal ? '' : '~'}{formatBytes(file.size)}
+                        </Text>
+                      </View>
+                      <View style={styles.fileBottomRow}>
+                        <Text style={[styles.fileAge, { color: colors.mutedForeground }]}>
+                          {file.ageText}
+                        </Text>
+                        <Text style={[styles.fileDot, { color: colors.border }]}>{' · '}</Text>
+                        <Text style={[styles.fileReco, { color: colors.mutedForeground }]} numberOfLines={1}>
+                          {file.recommendation}
+                        </Text>
+                      </View>
+                    </View>
+                    {/* Checkbox */}
+                    <View style={[styles.checkbox, {
+                      backgroundColor: file.selected ? colors.accent : 'transparent',
+                      borderColor: file.selected ? colors.accent : colors.border,
+                    }]}>
+                      {file.selected && <Text style={styles.checkMark}>✓</Text>}
+                    </View>
+                  </Pressable>
+                ))}
+              </View>
+            )}
           </Animated.View>
         )}
 
@@ -411,8 +557,9 @@ const styles = StyleSheet.create({
 
   idleIconBox: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
   idleTitle: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
-  idleInfoBox: { width: '100%', borderWidth: 1, padding: 14, gap: 6 },
-  idleInfoLine: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+  infoBox: { width: '100%', borderWidth: 1, padding: 12, gap: 5 },
+  infoTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },
+  infoLine: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
 
   primaryBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
@@ -420,20 +567,33 @@ const styles = StyleSheet.create({
   },
   primaryBtnText: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
 
-  scanningBox: { width: '100%', padding: 20, gap: 14 },
-  scanningTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
-  scanningPct: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
-  tickerLine: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+  scanBox: { width: '100%', padding: 20, gap: 14 },
+  scanTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  scanPct: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
+  scanStatus: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
 
-  countPanel: { padding: 10 },
-  countText: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 1, textAlign: 'center' },
+  countPanel: { padding: 12, gap: 4 },
+  countRow: { flexDirection: 'row', alignItems: 'center' },
+  countKey: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
+  countSep: { fontSize: 10, fontFamily: 'Inter_400Regular', color: '#444' },
+  countVal: { fontSize: 11, fontFamily: 'Inter_700Bold' },
+  countNote: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+
+  emptyPanel: { padding: 28, alignItems: 'center', gap: 8 },
+  emptyText: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  emptyDesc: { fontSize: 11, fontFamily: 'Inter_400Regular', textAlign: 'center', lineHeight: 18 },
 
   listPanel: { overflow: 'hidden' },
   fileRow: { flexDirection: 'row', alignItems: 'center', padding: 12, gap: 10 },
   fileIconBox: { width: 34, height: 34, borderWidth: 1, alignItems: 'center', justifyContent: 'center' },
-  fileInfo: { flex: 1 },
-  fileName: { fontSize: 12, fontFamily: 'Inter_500Medium' },
-  fileSize: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5, marginTop: 2 },
+  fileInfo: { flex: 1, gap: 4 },
+  fileTopRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8 },
+  fileName: { flex: 1, fontSize: 11, fontFamily: 'Inter_500Medium' },
+  fileSize: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+  fileBottomRow: { flexDirection: 'row', alignItems: 'center' },
+  fileAge: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  fileDot: { fontSize: 9 },
+  fileReco: { flex: 1, fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
   checkbox: { width: 18, height: 18, borderWidth: 2, alignItems: 'center', justifyContent: 'center' },
   checkMark: { color: '#FFF', fontSize: 10, fontFamily: 'Inter_700Bold', lineHeight: 14 },
 

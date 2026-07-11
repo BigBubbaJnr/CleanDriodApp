@@ -103,7 +103,7 @@ export default function StorageRingChart({ totalSpace, usedSpace, junkSize }: Pr
         </View>
         <View style={styles.legendItem}>
           <View style={[styles.legendDot, { backgroundColor: colors.accent }]} />
-          <Text style={[styles.legendLabel, { color: colors.mutedForeground }]}>JUNK</Text>
+          <Text style={[styles.legendLabel, { color: colors.mutedForeground }]}>CACHE</Text>
           <Text style={[styles.legendValue, { color: colors.accent }]}>{fmt(junkSize)}</Text>
         </View>
         <View style={styles.legendItem}>
