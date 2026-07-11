@@ -2,15 +2,10 @@ import React from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
+import { formatBytes } from '@/utils/format';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
-}
 
 function SysRow({
   label, value, icon, right, onPress, danger,
@@ -50,7 +45,7 @@ export default function SettingsScreen() {
     if (val) {
       Alert.alert(
         'ENABLE ROOT MODE?',
-        'Root mode gives CleanDroid access to system-level files for deeper cleaning. Device must be rooted.',
+        'Root access opens system-level file paths for deeper scanning. Requires a rooted device. Standard cleaning is always available without root.',
         [
           { text: 'CANCEL', style: 'cancel' },
           { text: 'ENABLE', onPress: () => { setRootEnabled(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } },
@@ -117,7 +112,7 @@ export default function SettingsScreen() {
         <SysRow
           icon="shield"
           label="Root Mode"
-          value={rootEnabled ? 'Enabled — deeper system access' : 'Disabled — standard mode'}
+          value={rootEnabled ? 'ACTIVE — SYSTEM-LEVEL ACCESS' : 'INACTIVE — STANDARD MODE'}
           right={
             <Switch
               value={rootEnabled}
@@ -140,9 +135,9 @@ export default function SettingsScreen() {
         borderBottomColor: colors.bevelDark,
         borderRightColor: colors.bevelDark,
       }]}>
-        <SysRow icon="info" label="CleanDroid" value="Version 1.0.0" />
-        <SysRow icon="heart" label="Free & Open" value="No subscriptions, no paywalls — ever" />
-        <SysRow icon="lock" label="Privacy" value="All cleaning on-device. No data leaves your phone." />
+        <SysRow icon="info" label="CleanDroid" value="Build 1.0.0" />
+        <SysRow icon="heart" label="Free Forever" value="NO PAYWALLS. NO TIERS. NO EXCEPTIONS." />
+        <SysRow icon="lock" label="Privacy" value="ALL OPS LOCAL — ZERO NETWORK CALLS" />
       </View>
 
       {/* Free pledge — retro box */}

@@ -379,7 +379,7 @@ export default function DuplicateFinderScreen() {
                 borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
               }]}>
                 <Feather name="search" size={16} color="#000" />
-                <Text style={[styles.primaryBtnText, { color: '#000' }]}>{'>> SCAN FOR DUPES'}</Text>
+                <Text style={[styles.primaryBtnText, { color: '#000' }]}>{'>> SCAN FOR DUPLICATES'}</Text>
               </View>
             </Pressable>
           </Animated.View>
@@ -524,9 +524,9 @@ export default function DuplicateFinderScreen() {
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
             <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.doneHead, { color: accentGreen }]}>{'[OK] DUPES REMOVED'}</Text>
+              <Text style={[styles.doneHead, { color: accentGreen }]}>{'[OK] DUPLICATES PURGED'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(bytesFreed)}</Text>
-              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED FROM DUPLICATES</Text>
+              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>RECLAIMED</Text>
             </View>
             <Pressable onPress={() => { setPhase('idle'); setGroups([]); setScanLog([]); }} style={styles.fullWidth}>
               <View style={[styles.outlineBtn, {
@@ -535,7 +535,7 @@ export default function DuplicateFinderScreen() {
                 borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
                 backgroundColor: colors.card,
               }]}>
-                <Text style={[styles.outlineBtnText, { color: colors.foreground }]}>{'>> SCAN AGAIN'}</Text>
+                <Text style={[styles.outlineBtnText, { color: colors.foreground }]}>{'>> RE-SCAN'}</Text>
               </View>
             </Pressable>
           </Animated.View>
@@ -564,7 +564,7 @@ export default function DuplicateFinderScreen() {
                 ? <ActivityIndicator color="#000" size="small" />
                 : <>
                     <Feather name="trash-2" size={16} color="#000" />
-                    <Text style={[styles.primaryBtnText, { color: '#000' }]}>{'>> DELETE DUPLICATES'}</Text>
+                    <Text style={[styles.primaryBtnText, { color: '#000' }]}>{'>> PURGE DUPLICATES'}</Text>
                   </>
               }
             </View>

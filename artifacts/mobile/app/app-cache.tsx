@@ -290,13 +290,13 @@ export default function AppCacheScreen() {
         {phase === 'sweep-ready' && (
           <Animated.View entering={FadeIn} style={{ gap: 12 }}>
             <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] AUTO-CLEAR COMPLETE'}</Text>
+              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] AUTO-CLEAR: COMPLETE'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(autoClearedBytes)}</Text>
-              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED AUTOMATICALLY</Text>
+              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>RECLAIMED AUTOMATICALLY</Text>
             </View>
 
             <Text style={[styles.sectionLabel, { color: colors.primary }]}>
-              {'── SWEEP SYSTEM APPS ────────────────'}
+              {'── SMART SWEEP ──────────────────────'}
             </Text>
             <View style={[styles.listPanel, bevel, { backgroundColor: colors.card }]}>
               {apps.map((app, idx) => (
@@ -362,7 +362,7 @@ export default function AppCacheScreen() {
                   ]}>
                     <Text style={[{ color: colors.success, fontSize: 12, fontFamily: 'Inter_700Bold' }]}>✓</Text>
                     <Text style={[styles.appName, { color: colors.mutedForeground, flex: 1 }]}>{app.name.toUpperCase()}</Text>
-                    <Text style={[styles.appSize, { color: colors.success }]}>CLEARED</Text>
+                    <Text style={[styles.appSize, { color: colors.success }]}>DONE</Text>
                   </View>
                 ))}
               </View>
@@ -374,9 +374,9 @@ export default function AppCacheScreen() {
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
             <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] ALL CACHES CLEARED'}</Text>
+              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] SWEEP COMPLETE'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(totalFreed)}</Text>
-              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>TOTAL FREED</Text>
+              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>TOTAL RECLAIMED</Text>
             </View>
             <Pressable onPress={() => {
               setPhase('idle');

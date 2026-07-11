@@ -52,7 +52,7 @@ export default function ScreenshotManagerScreen() {
 
   const loadScreenshots = useCallback(async () => {
     setPhase('loading');
-    setLoadStatus('requesting media access...');
+    setLoadStatus('REQUESTING MEDIA ACCESS...');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     if (Platform.OS === 'web') {
@@ -68,17 +68,17 @@ export default function ScreenshotManagerScreen() {
       return;
     }
 
-    setLoadStatus('finding Screenshots album...');
+    setLoadStatus('LOCATING SCREENSHOTS ALBUM...');
     const albums = await MediaLibrary.getAlbumsAsync({ includeSmartAlbums: true });
     const ssAlbum = albums.find(a => a.title.toLowerCase().includes('screenshot'));
 
     if (!ssAlbum) {
-      setLoadStatus('no Screenshots album found on this device');
+      setLoadStatus('[ERR] NO SCREENSHOTS ALBUM FOUND ON THIS DEVICE');
       setPhase('results');
       return;
     }
 
-    setLoadStatus(`loading ${ssAlbum.assetCount} screenshots...`);
+    setLoadStatus(`LOADING ${ssAlbum.assetCount} SCREENSHOTS...`);
     // Paginate through all screenshots (cap at 5000 to protect UI performance)
     let allAssets: MediaLibrary.Asset[] = [];
     let cursor: string | undefined;
@@ -232,7 +232,7 @@ export default function ScreenshotManagerScreen() {
             {screenshots.length === 0 && (
               <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
                 <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ _ ]'}</Text>
-                <Text style={[styles.emptyTitle, { color: colors.foreground }]}>NO SCREENSHOTS</Text>
+                <Text style={[styles.emptyTitle, { color: colors.foreground }]}>SYSTEM STATUS: CLEAN</Text>
                 <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
                   {loadStatus || 'No Screenshots album found on this device'}
                 </Text>
@@ -288,9 +288,9 @@ export default function ScreenshotManagerScreen() {
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
             <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] DELETED'}</Text>
+              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] PURGED'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>~{formatBytes(freedBytes)}</Text>
-              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED FROM SCREENSHOTS</Text>
+              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>RECLAIMED</Text>
             </View>
             <Pressable onPress={loadScreenshots} style={styles.fullWidth}>
               <View style={[styles.outlineBtn, {

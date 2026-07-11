@@ -55,7 +55,7 @@ function getRecommendation(bd: MediaBreakdown): string[] {
       `App cache is ${formatBytes(bd.appCache.size)} — caches rebuild automatically so clearing is always safe`,
     );
   if (recos.length === 0)
-    recos.push('Storage looks healthy — no action needed right now');
+    recos.push('SYSTEM STATUS: OPTIMAL — no immediate action required');
   return recos;
 }
 
@@ -260,7 +260,7 @@ export default function StorageIntelScreen() {
             }]}>
               <Feather name="bar-chart-2" size={16} color={colors.primaryForeground} />
               <Text style={[styles.primaryBtnText, { color: colors.primaryForeground }]}>
-                {mediaBreakdown ? '>> RE-SCAN STORAGE' : '>> ANALYSE STORAGE'}
+                {mediaBreakdown ? '>> RE-SCAN' : '>> ANALYSE STORAGE'}
               </Text>
             </View>
           </Pressable>
@@ -404,9 +404,9 @@ export default function StorageIntelScreen() {
         {!mediaBreakdown && !scanning && (
           <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
             <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ _ ]'}</Text>
-            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>NO ANALYSIS YET</Text>
+            <Text style={[styles.emptyTitle, { color: colors.foreground }]}>AWAITING SCAN</Text>
             <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
-              Tap Analyse Storage to scan your media library and get a real breakdown by category
+              {'> NO DATA ON FILE — run Analyse Storage\nto map your media library by category'}
             </Text>
           </View>
         )}

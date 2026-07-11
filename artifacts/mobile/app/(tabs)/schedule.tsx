@@ -111,7 +111,7 @@ export default function ScheduleScreen() {
       <Text style={[styles.sysLabel, { color: colors.mutedForeground }]}>{'> DAEMON CONFIG'}</Text>
       <Text style={[styles.heading, { color: colors.foreground }]}>AUTO-CLEAN</Text>
       <View style={[styles.divider, { backgroundColor: colors.border }]} />
-      <Text style={[styles.sub, { color: colors.mutedForeground }]}>SET IT AND FORGET IT</Text>
+      <Text style={[styles.sub, { color: colors.mutedForeground }]}>DAEMON HANDLES IT — ZERO MAINTENANCE</Text>
 
       {/* Toggle */}
       <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
@@ -217,10 +217,10 @@ export default function ScheduleScreen() {
               </View>
               <Text style={[styles.trendNote, { color: colors.mutedForeground }]}>
                 {trend.trend === 'up'
-                  ? '> More storage cleaned this week than last — good progress'
+                  ? '> WEEK-ON-WEEK: UP — STORAGE RECLAIM TRENDING HIGHER'
                   : trend.trend === 'down' && trend.lastWeek > 0
-                    ? '> Less cleaned this week — run a scan to find more space'
-                    : '> Storage activity consistent week-over-week'
+                    ? '> WEEK-ON-WEEK: DOWN — RUN A SCAN TO RECOVER MORE SPACE'
+                    : '> WEEK-ON-WEEK: STABLE — RECLAIM RATE NOMINAL'
                 }
               </Text>
             </View>
@@ -289,7 +289,9 @@ export default function ScheduleScreen() {
                   </Text>
                   <Text style={[styles.histDate, { color: colors.mutedForeground }]}>{formatAbsoluteDate(item.date)}</Text>
                 </View>
-                <Text style={[styles.histSize, { color: colors.accent }]}>+{formatBytes(item.bytesFreed)}</Text>
+                <Text style={[styles.histSize, { color: colors.accent }]}>
+                  {item.bytesFreed > 0 ? '+' + formatBytes(item.bytesFreed) : '—'}
+                </Text>
               </View>
             ))}
           </View>
@@ -298,7 +300,7 @@ export default function ScheduleScreen() {
         <View style={[styles.emptyBox, bevel, { backgroundColor: colors.card, marginTop: 20 }]}>
           <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ LOG EMPTY ]'}</Text>
           <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-            History and trends appear here after your first cleaning operation
+            {'> AWAITING FIRST OPERATION — history and\ntrends populate after first clean'}
           </Text>
         </View>
       )}

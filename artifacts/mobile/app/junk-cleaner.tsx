@@ -376,7 +376,7 @@ export default function JunkCleanerScreen() {
               <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
                 <Text style={[styles.emptyText, { color: colors.success }]}>{'[OK] DEVICE IS CLEAN'}</Text>
                 <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
-                  No junk found within accessible storage areas
+                  {'> NO REMOVABLE JUNK DETECTED IN ACCESSIBLE STORAGE'}
                 </Text>
               </View>
             ) : (
@@ -431,9 +431,9 @@ export default function JunkCleanerScreen() {
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
             <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] CLEAN COMPLETE'}</Text>
+              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] PURGE COMPLETE'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>~{formatBytes(bytesFreed)}</Text>
-              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED FROM DEVICE</Text>
+              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>RECLAIMED</Text>
             </View>
             <Pressable onPress={() => { setPhase('idle'); setItems([]); setScanLog([]); }} style={styles.fullWidth}>
               <View style={[styles.outlineBtn, {

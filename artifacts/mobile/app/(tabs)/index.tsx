@@ -17,9 +17,9 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
-import { useCleaner } from '@/context/CleanerContext';
+import { useCleaner, MediaBreakdown } from '@/context/CleanerContext';
 import { useBevel } from '@/hooks/useBevel';
-import { formatBytes, formatRelativeDate } from '@/utils/format';
+import { formatBytes, formatDelta, formatRelativeDate } from '@/utils/format';
 import SegBar from '@/components/SegBar';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
@@ -27,7 +27,68 @@ import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import StorageRingChart from '@/components/StorageRingChart';
 
-/** Blinking cursor for the app name */
+// ── Health engine ─────────────────────────────────────────────────────────────
+// Scores are derived entirely from real device data — no invented numbers.
+
+type HealthTier = 'OPTIMAL' | 'HEALTHY' | 'MODERATE' | 'CRITICAL' | 'UNKNOWN';
+const TIER_ORDER: HealthTier[] = ['OPTIMAL', 'HEALTHY', 'MODERATE', 'CRITICAL'];
+
+function worstTier(tiers: HealthTier[]): HealthTier {
+  const known = tiers.filter(t => t !== 'UNKNOWN');
+  if (!known.length) return 'UNKNOWN';
+  return known.reduce(
+    (w, t) => TIER_ORDER.indexOf(t) > TIER_ORDER.indexOf(w) ? t : w,
+    known[0],
+  );
+}
+
+function storageHealth(usedFrac: number): HealthTier {
+  if (usedFrac > 0.85) return 'CRITICAL';
+  if (usedFrac > 0.70) return 'MODERATE';
+  if (usedFrac > 0.50) return 'HEALTHY';
+  return 'OPTIMAL';
+}
+
+function cacheHealth(cacheFrac: number): HealthTier {
+  if (cacheFrac > 0.12) return 'MODERATE';
+  if (cacheFrac > 0.06) return 'HEALTHY';
+  return 'OPTIMAL';
+}
+
+function screenshotHealth(count: number): HealthTier {
+  if (count > 300) return 'MODERATE';
+  if (count > 150) return 'HEALTHY';
+  return 'OPTIMAL';
+}
+
+function downloadHealth(count: number): HealthTier {
+  if (count > 200) return 'MODERATE';
+  if (count > 100) return 'HEALTHY';
+  return 'OPTIMAL';
+}
+
+function tierPct(t: HealthTier): number {
+  const map: Record<HealthTier, number> = {
+    OPTIMAL: 0.12, HEALTHY: 0.44, MODERATE: 0.72, CRITICAL: 1.0, UNKNOWN: 0,
+  };
+  return map[t];
+}
+
+function countRecos(bd: MediaBreakdown | null): number {
+  if (!bd) return 0;
+  let n = 0;
+  const total = bd.images.size + bd.videos.size + bd.audio.size + bd.screenshots.size;
+  if (total > 0) {
+    if (bd.videos.size / total > 0.5) n++;
+    if (bd.screenshots.size / total > 0.1) n++;
+    if (bd.downloads.count > 50) n++;
+  }
+  if (bd.appCache.size > 50 * 1024 * 1024) n++;
+  return n;
+}
+
+// ── Sub-components ────────────────────────────────────────────────────────────
+
 function BlinkCursor({ color }: { color: string }) {
   const [vis, setVis] = useState(true);
   useEffect(() => {
@@ -79,11 +140,16 @@ function ScanButton({ onPress }: { onPress: () => void }) {
   );
 }
 
+// ── Screen ────────────────────────────────────────────────────────────────────
+
 export default function HomeScreen() {
   const colors = useColors();
   const bevel = useBevel();
   const insets = useSafeAreaInsets();
-  const { storageStats, isLoadingStats, history, totalBytesFreed, refreshStats } = useCleaner();
+  const {
+    storageStats, isLoadingStats, history, totalBytesFreed, refreshStats,
+    mediaBreakdown, snapshots,
+  } = useCleaner();
   const [refreshing, setRefreshing] = useState(false);
 
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
@@ -95,18 +161,76 @@ export default function HomeScreen() {
     setRefreshing(false);
   }, [refreshStats]);
 
-  // Memoised derivations — avoid recalculating on every render
+  // ── Colour mapper ──────────────────────────────────────────────────────────
+  const tierColor = useCallback((t: HealthTier): string => {
+    switch (t) {
+      case 'OPTIMAL':  return colors.success;
+      case 'HEALTHY':  return colors.primary;
+      case 'MODERATE': return colors.warning;
+      case 'CRITICAL': return colors.destructive;
+      default:         return colors.mutedForeground;
+    }
+  }, [colors]);
+
+  // ── Memoised derivations ───────────────────────────────────────────────────
   const recentHistory = useMemo(() => history.slice(0, 5), [history]);
-  const usedPct = useMemo(
+
+  const usedFrac = useMemo(
     () => storageStats
       ? (storageStats.usedSpace - storageStats.appCacheSize) / storageStats.totalSpace
       : 0,
     [storageStats],
   );
-  const junkPct = useMemo(
+  const cacheFrac = useMemo(
     () => storageStats ? storageStats.appCacheSize / storageStats.totalSpace : 0,
     [storageStats],
   );
+
+  // ── Health tiers ───────────────────────────────────────────────────────────
+  const tiers = useMemo(() => ({
+    storage:     storageStats    ? storageHealth(usedFrac)                            : 'UNKNOWN' as HealthTier,
+    cache:       storageStats    ? cacheHealth(cacheFrac)                             : 'UNKNOWN' as HealthTier,
+    screenshots: mediaBreakdown  ? screenshotHealth(mediaBreakdown.screenshots.count) : 'UNKNOWN' as HealthTier,
+    downloads:   mediaBreakdown  ? downloadHealth(mediaBreakdown.downloads.count)     : 'UNKNOWN' as HealthTier,
+  }), [storageStats, mediaBreakdown, usedFrac, cacheFrac]);
+
+  const overall = useMemo(
+    () => worstTier(Object.values(tiers) as HealthTier[]),
+    [tiers],
+  );
+
+  const dimensions = useMemo(() => [
+    {
+      key: 'storage', label: 'STORAGE',
+      tier: tiers.storage,
+      value: storageStats ? formatBytes(storageStats.freeSpace) + ' FREE' : '—',
+    },
+    {
+      key: 'cache', label: 'CACHE',
+      tier: tiers.cache,
+      value: storageStats ? formatBytes(storageStats.appCacheSize) : '—',
+    },
+    {
+      key: 'shots', label: 'SCREENSHOTS',
+      tier: tiers.screenshots,
+      value: mediaBreakdown ? `${mediaBreakdown.screenshots.count} FILES` : "UNSCAN'D",
+    },
+    {
+      key: 'dl', label: 'DOWNLOADS',
+      tier: tiers.downloads,
+      value: mediaBreakdown ? `${mediaBreakdown.downloads.count} FILES` : "UNSCAN'D",
+    },
+  ], [tiers, storageStats, mediaBreakdown]);
+
+  const storageDelta = useMemo(
+    () => snapshots.length >= 2 ? snapshots[0].usedSpace - snapshots[1].usedSpace : null,
+    [snapshots],
+  );
+  const lastScanAge = useMemo(
+    () => snapshots.length ? formatRelativeDate(snapshots[0].timestamp) : null,
+    [snapshots],
+  );
+  const recoCount = useMemo(() => countRecos(mediaBreakdown), [mediaBreakdown]);
 
   return (
     <ScrollView
@@ -165,7 +289,7 @@ export default function HomeScreen() {
       {storageStats && (
         <View style={styles.statRow}>
           {[
-            { label: 'CACHE', value: formatBytes(storageStats.appCacheSize), color: colors.accent, pct: junkPct },
+            { label: 'CACHE', value: formatBytes(storageStats.appCacheSize), color: colors.accent, pct: cacheFrac },
             {
               label: 'FREED', value: formatBytes(totalBytesFreed), color: colors.primary,
               pct: Math.min(1, totalBytesFreed / (storageStats.totalSpace || 1)),
@@ -181,6 +305,103 @@ export default function HomeScreen() {
         </View>
       )}
 
+      {/* ── Device Status ── */}
+      <View style={styles.section}>
+        <Text style={[styles.sectionLabel, { color: colors.mutedForeground }]}>
+          {'── DEVICE STATUS ─────────────────'}
+        </Text>
+        <View style={[styles.statusCard, bevel, { backgroundColor: colors.card }]}>
+
+          {/* Overall health header */}
+          <View style={[styles.statusHeader, { borderBottomColor: colors.border }]}>
+            <View>
+              <Text style={[styles.overallBadge, { color: tierColor(overall) }]}>
+                {'[' + overall + ']'}
+              </Text>
+              <Text style={[styles.overallLabel, { color: colors.mutedForeground }]}>
+                DEVICE HEALTH
+              </Text>
+            </View>
+            {lastScanAge && (
+              <View style={styles.statusRight}>
+                {storageDelta !== null && (
+                  <Text style={[styles.deltaText, { color: storageDelta > 0 ? colors.accent : colors.success }]}>
+                    {formatDelta(storageDelta)} STORAGE
+                  </Text>
+                )}
+                <Text style={[styles.lastScanText, { color: colors.mutedForeground }]}>
+                  {'LAST SCAN: ' + lastScanAge.toUpperCase()}
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* Per-dimension rows */}
+          {dimensions.map((d, idx) => {
+            const tc = tierColor(d.tier);
+            const pct = tierPct(d.tier);
+            const isLast = idx === dimensions.length - 1;
+            return (
+              <View
+                key={d.key}
+                style={[
+                  styles.dimRow,
+                  !isLast && { borderBottomColor: colors.border, borderBottomWidth: 1 },
+                ]}
+              >
+                <Text style={[styles.dimPrompt, { color: colors.primary }]}>{'>'}</Text>
+                <View style={styles.dimMain}>
+                  <View style={styles.dimTop}>
+                    <Text style={[styles.dimKey, { color: colors.mutedForeground }]}>{d.label}</Text>
+                    <Text style={[styles.dimTier, { color: tc }]}>
+                      {d.tier === 'UNKNOWN' ? '[?]' : '[' + d.tier + ']'}
+                    </Text>
+                  </View>
+                  <View style={styles.dimBottom}>
+                    <View style={{ flex: 1 }}>
+                      <SegBar
+                        value={pct}
+                        color={d.tier === 'UNKNOWN' ? colors.border : tc}
+                        total={14}
+                        height={4}
+                      />
+                    </View>
+                    <Text style={[styles.dimValue, { color: colors.mutedForeground }]}>
+                      {d.value}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+            );
+          })}
+
+          {/* Recommendations footer */}
+          {recoCount > 0 ? (
+            <Pressable
+              onPress={() => router.push('/storage-intel')}
+              style={[styles.recoRow, { borderTopColor: colors.border }]}
+            >
+              <Feather name="alert-triangle" size={11} color={colors.accent} />
+              <Text style={[styles.recoText, { color: colors.accent }]}>
+                {'[!] ' + recoCount + ' RECOMMENDATION' + (recoCount !== 1 ? 'S' : '') + ' — VIEW ANALYSIS'}
+              </Text>
+              <Text style={[styles.recoArrow, { color: colors.mutedForeground }]}>{'→'}</Text>
+            </Pressable>
+          ) : !mediaBreakdown ? (
+            <Pressable
+              onPress={() => router.push('/storage-intel')}
+              style={[styles.recoRow, { borderTopColor: colors.border }]}
+            >
+              <Text style={[styles.dimPrompt, { color: colors.mutedForeground }]}>{'>'}</Text>
+              <Text style={[styles.recoText, { color: colors.mutedForeground }]}>
+                RUN STORAGE INTELLIGENCE FOR FULL ANALYSIS
+              </Text>
+              <Text style={[styles.recoArrow, { color: colors.mutedForeground }]}>{'→'}</Text>
+            </Pressable>
+          ) : null}
+        </View>
+      </View>
+
       {/* ── Activity Log ── */}
       {recentHistory.length > 0 && (
         <View style={styles.section}>
@@ -191,7 +412,10 @@ export default function HomeScreen() {
             {recentHistory.map((item, idx) => (
               <View
                 key={item.id}
-                style={[styles.logRow, idx < recentHistory.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border }]}
+                style={[
+                  styles.logRow,
+                  idx < recentHistory.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
+                ]}
               >
                 <Text style={[styles.logPrefix, { color: colors.primary }]}>{'>'}</Text>
                 <View style={styles.logContent}>
@@ -203,7 +427,7 @@ export default function HomeScreen() {
                   </Text>
                 </View>
                 <Text style={[styles.logSize, { color: colors.accent }]}>
-                  +{formatBytes(item.bytesFreed)}
+                  {item.bytesFreed > 0 ? '+' + formatBytes(item.bytesFreed) : '—'}
                 </Text>
               </View>
             ))}
@@ -211,16 +435,6 @@ export default function HomeScreen() {
         </View>
       )}
 
-      {/* ── Empty state ── */}
-      {history.length === 0 && (
-        <View style={[styles.emptyBox, bevel, { backgroundColor: colors.card }]}>
-          <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ _ ]'}</Text>
-          <Text style={[styles.emptyTitle, { color: colors.foreground }]}>NO SCANS YET</Text>
-          <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
-            Tap Quick Scan to analyse your storage and find space to reclaim
-          </Text>
-        </View>
-      )}
     </ScrollView>
   );
 }
@@ -228,6 +442,8 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1 },
   content: { paddingHorizontal: 16 },
+
+  // Header
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 },
   sysLabel: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 2, marginBottom: 2 },
   appName: { fontSize: 26, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
@@ -236,12 +452,16 @@ const styles = StyleSheet.create({
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
   divider: { height: 1, marginBottom: 16 },
+
+  // Storage map
   storageCard: {
     padding: 16, marginBottom: 16,
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
   loading: { gap: 12, paddingVertical: 20 },
   loadingText: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
+
+  // Scan button
   scanWrapper: { alignItems: 'center', marginBottom: 20, position: 'relative' },
   scanGlow: { position: 'absolute', width: '100%', height: 52, top: 0 },
   scanAnimWrap: { width: '100%' },
@@ -251,6 +471,8 @@ const styles = StyleSheet.create({
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
   scanBtnText: { fontSize: 14, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+
+  // Stat row
   statRow: { flexDirection: 'row', gap: 6, marginBottom: 20 },
   statBox: {
     flex: 1, padding: 10, gap: 5,
@@ -258,8 +480,38 @@ const styles = StyleSheet.create({
   },
   statLabel: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5 },
   statValue: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+
+  // Shared section wrapper
   section: { marginBottom: 16 },
   sectionLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 6 },
+
+  // Device Status card
+  statusCard: {
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+    overflow: 'hidden',
+  },
+  statusHeader: {
+    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
+    padding: 12, borderBottomWidth: 1,
+  },
+  overallBadge: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 1.5 },
+  overallLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginTop: 3 },
+  statusRight: { alignItems: 'flex-end', gap: 3 },
+  deltaText: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
+  lastScanText: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
+  dimRow: { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 9, gap: 8 },
+  dimPrompt: { fontSize: 12, fontFamily: 'Inter_700Bold', width: 12 },
+  dimMain: { flex: 1, gap: 4 },
+  dimTop: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
+  dimKey: { fontSize: 9, fontFamily: 'Inter_600SemiBold', letterSpacing: 1.5 },
+  dimTier: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  dimBottom: { flexDirection: 'row', alignItems: 'center', gap: 8 },
+  dimValue: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 0.5, minWidth: 72, textAlign: 'right' },
+  recoRow: { flexDirection: 'row', alignItems: 'center', padding: 10, gap: 8, borderTopWidth: 1 },
+  recoText: { flex: 1, fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  recoArrow: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+
+  // Activity log
   logCard: {
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
     overflow: 'hidden',
@@ -270,11 +522,4 @@ const styles = StyleSheet.create({
   logLabel: { fontSize: 11, fontFamily: 'Inter_600SemiBold', letterSpacing: 0.5 },
   logDate: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginTop: 2 },
   logSize: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 0.5 },
-  emptyBox: {
-    padding: 32, alignItems: 'center', gap: 8,
-    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-  },
-  emptyIcon: { fontSize: 22, fontFamily: 'Inter_700Bold', letterSpacing: 4 },
-  emptyTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginTop: 4 },
-  emptyText: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, textAlign: 'center', lineHeight: 18 },
 });

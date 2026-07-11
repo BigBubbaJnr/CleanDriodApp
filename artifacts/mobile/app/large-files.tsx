@@ -110,7 +110,7 @@ export default function LargeFilesScreen() {
   const startScan = useCallback(async () => {
     setPhase('scanning');
     setScanProgress(0);
-    setScanStatus('initialising...');
+    setScanStatus('INIT...');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
 
     if (Platform.OS === 'web') {
@@ -121,7 +121,7 @@ export default function LargeFilesScreen() {
       return;
     }
 
-    setScanStatus('requesting media access...');
+    setScanStatus('REQUESTING MEDIA ACCESS...');
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== 'granted') {
       setScanStatus('[!] permission denied');
@@ -132,7 +132,7 @@ export default function LargeFilesScreen() {
     }
 
     // ── Phase 1: paginate all photos and videos ──────────────────────────────
-    setScanStatus('loading photo library...');
+    setScanStatus('LOADING PHOTO LIBRARY...');
     let allFiles: LargeFile[] = [];
     const now = Date.now();
 
@@ -161,7 +161,7 @@ export default function LargeFilesScreen() {
       setScanProgress(Math.min(35, 10 + Math.floor(allFiles.length / 20)));
     } while (photoCursor && allFiles.length < 5000);
 
-    setScanStatus('loading video library...');
+    setScanStatus('LOADING VIDEO LIBRARY...');
     setScanProgress(40);
 
     // Videos
@@ -197,7 +197,7 @@ export default function LargeFilesScreen() {
     setScanProgress(70);
 
     // ── Phase 2: real sizes for top 30 ──────────────────────────────────────
-    setScanStatus('measuring top files...');
+    setScanStatus('MEASURING FILE SIZES...');
     const top30 = top200.slice(0, 30);
     const realSizes = await Promise.all(
       top30.map(f => getRealFileSize(f.uri))
@@ -456,9 +456,9 @@ export default function LargeFilesScreen() {
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
             <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
-              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] FILES REMOVED'}</Text>
+              <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] FILES PURGED'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(bytesFreed)}</Text>
-              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED UP</Text>
+              <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>RECLAIMED</Text>
             </View>
             <Pressable onPress={() => { setPhase('idle'); setFiles([]); }} style={styles.fullWidth}>
               <View style={[styles.outlineBtn, {
