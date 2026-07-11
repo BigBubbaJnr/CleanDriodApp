@@ -53,13 +53,14 @@ function normalizeFilename(filename: string): string {
 
 function getDuplicateRecommendation(
   count: number,
-  matchType: 'filename' | 'dimension_date',
+  matchType: 'filename' | 'dimension_date' | 'burst',
   oldestDays: number,
   newestDays: number,
   wasted: number,
 ): string {
   const parts: string[] = [];
   if (matchType === 'filename') parts.push('Same filename detected');
+  else if (matchType === 'burst') parts.push('Camera burst sequence');
   else parts.push('Same resolution & date');
   if (oldestDays > 365) parts.push(`oldest copy over ${Math.floor(oldestDays / 365)}y old`);
   else if (oldestDays > 30) parts.push(`oldest copy ${Math.floor(oldestDays / 30)}mo old`);
@@ -73,14 +74,15 @@ interface DuplicateGroup {
   id: string;
   displayFilename: string;
   normalizedName: string;
-  matchType: 'filename' | 'dimension_date';
+  matchType: 'filename' | 'dimension_date' | 'burst';
+  hashVerified: boolean;  // true if partial file hash confirms content match
   size: number;           // bytes per copy
   sizeIsReal: boolean;
   count: number;
   uris: string[];
   assetIds: string[];
   creationTimes: number[];   // seconds, same order as uris
-  keepIndex: number;         // index of newest copy
+  keepIndex: number;         // index of best copy to keep
   selectedIndexes: Set<number>;
   recommendation: string;
   wasted: number;
@@ -184,6 +186,31 @@ export default function DuplicateFinderScreen() {
     }
     setScanProgress(70);
 
+    // ── Phase 3.5: Burst sequence detection ─────────────────────────────────
+    // Photos taken within 5 seconds of each other = camera burst mode.
+    // This catches the common case where users fire 5-10 shots and keep all of them.
+    addLog('detecting burst sequences...');
+    const BURST_GAP_SEC = 5;  // ≤5 seconds between consecutive shots = burst
+    const MIN_BURST = 3;      // need ≥3 photos to qualify as a burst sequence
+
+    const sortedByTime = [...allPhotos]
+      .filter(a => a.width > 0 && a.height > 0)
+      .sort((a, b) => a.creationTime - b.creationTime);
+
+    const burstGroupsList: MediaLibrary.Asset[][] = [];
+    let bi = 0;
+    while (bi < sortedByTime.length) {
+      let bj = bi + 1;
+      while (
+        bj < sortedByTime.length &&
+        sortedByTime[bj].creationTime - sortedByTime[bj - 1].creationTime <= BURST_GAP_SEC
+      ) { bj++; }
+      if (bj - bi >= MIN_BURST) burstGroupsList.push(sortedByTime.slice(bi, bj));
+      bi = bj;
+    }
+    addLog(`burst sequences: ${burstGroupsList.length} detected`);
+    setScanProgress(75);
+
     // ── Phase 4: Collect all candidate groups ───────────────────────────────
     addLog('identifying duplicates...');
     const usedAssetIds = new Set<string>();
@@ -210,6 +237,7 @@ export default function DuplicateFinderScreen() {
         displayFilename: fresh[keepIdx].filename,
         normalizedName: normName,
         matchType: 'filename',
+        hashVerified: false,
         size: estSize,
         sizeIsReal: false,
         count: fresh.length,
@@ -219,6 +247,40 @@ export default function DuplicateFinderScreen() {
         keepIndex: keepIdx,
         selectedIndexes: new Set(fresh.map((_, i) => i).filter(i => i !== keepIdx)),
         recommendation: getDuplicateRecommendation(fresh.length, 'filename', oldestDays, newestDays, wasted),
+        wasted,
+      });
+    }
+
+    // Process burst sequences (camera bursts — keep middle/sharpest shot)
+    for (const burst of burstGroupsList) {
+      const fresh = burst.filter(a => !usedAssetIds.has(a.id));
+      if (fresh.length < MIN_BURST) continue;
+      fresh.forEach(a => usedAssetIds.add(a.id));
+
+      // Middle shot tends to be sharpest — camera stabilises after the first burst frame
+      const keepIdx = Math.floor(fresh.length / 2);
+      const estSize = estimateImageSize(fresh[0].width, fresh[0].height);
+      const wasted = estSize * (fresh.length - 1);
+      const durationSec = fresh[fresh.length - 1].creationTime - fresh[0].creationTime;
+      const oldestDays = Math.floor((Date.now() - fresh[0].creationTime * 1000) / 86_400_000);
+      const newestDays = Math.floor((Date.now() - fresh[keepIdx].creationTime * 1000) / 86_400_000);
+
+      candidateGroups.push({
+        id: `burst_${fresh[0].id}`,
+        displayFilename: `${fresh.length}-shot burst · ${fresh[0].width}×${fresh[0].height}`,
+        normalizedName: '',
+        matchType: 'burst',
+        hashVerified: false,
+        size: estSize,
+        sizeIsReal: false,
+        count: fresh.length,
+        uris: fresh.map(a => a.uri),
+        assetIds: fresh.map(a => a.id),
+        creationTimes: fresh.map(a => a.creationTime),
+        keepIndex: keepIdx,
+        selectedIndexes: new Set(fresh.map((_, idx) => idx).filter(idx => idx !== keepIdx)),
+        recommendation: getDuplicateRecommendation(fresh.length, 'burst', oldestDays, newestDays, wasted) +
+          ` · ${durationSec}s sequence`,
         wasted,
       });
     }
@@ -242,6 +304,7 @@ export default function DuplicateFinderScreen() {
         displayFilename: `${fresh[0].width}×${fresh[0].height} (${fresh.length} copies)`,
         normalizedName: '',
         matchType: 'dimension_date',
+        hashVerified: false,
         size: estSize,
         sizeIsReal: false,
         count: fresh.length,
@@ -275,6 +338,35 @@ export default function DuplicateFinderScreen() {
 
     // Re-sort after real sizes
     topGroups.sort((a, b) => b.wasted - a.wasted);
+
+    // ── Phase 5.5: Partial hash verification for dimension_date groups ───────
+    // Read first 32 KB of two files in each group — if bytes match, it's a
+    // confirmed duplicate, not just same-day same-resolution coincidence.
+    const dimTargets = topGroups.filter(g => g.matchType === 'dimension_date').slice(0, 8);
+    if (dimTargets.length > 0) {
+      addLog(`hash-verifying ${dimTargets.length} dimension matches...`);
+      await Promise.all(dimTargets.map(async (grp) => {
+        try {
+          const idA = grp.assetIds[0];
+          const idB = grp.assetIds[grp.keepIndex] ?? grp.assetIds[0];
+          if (idA === idB) return;
+          const [infoA, infoB] = await Promise.all([
+            MediaLibrary.getAssetInfoAsync(idA),
+            MediaLibrary.getAssetInfoAsync(idB),
+          ]);
+          const uriA = infoA.localUri;
+          const uriB = infoB.localUri;
+          if (!uriA || !uriB || uriA === uriB) return;
+          const [chunkA, chunkB] = await Promise.all([
+            FileSystem.readAsStringAsync(uriA, { encoding: FileSystem.EncodingType.Base64, length: 32768 } as any),
+            FileSystem.readAsStringAsync(uriB, { encoding: FileSystem.EncodingType.Base64, length: 32768 } as any),
+          ]);
+          if (chunkA.length > 100 && chunkA === chunkB) grp.hashVerified = true;
+        } catch { /* hash verification is best-effort — skip on any failure */ }
+      }));
+      const verified = dimTargets.filter(g => g.hashVerified).length;
+      if (verified > 0) addLog(`hash verified: ${verified} group${verified !== 1 ? 's' : ''} confirmed identical`);
+    }
 
     setScanProgress(100);
     addLog(`found ${topGroups.length} duplicate group${topGroups.length !== 1 ? 's' : ''}`);
@@ -380,18 +472,21 @@ export default function DuplicateFinderScreen() {
             </View>
             <Text style={[styles.idleTitle, { color: colors.foreground }]}>DUPLICATE FINDER</Text>
             <View style={[styles.infoBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
-              <Text style={[styles.infoTitle, { color: accentGreen }]}>{'[DETECTION METHOD]'}</Text>
+              <Text style={[styles.infoTitle, { color: accentGreen }]}>{'[DETECTION METHODS]'}</Text>
               <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
                 {'[1] '} Filename match — strips copy suffixes like "(1)"
               </Text>
               <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
-                {'[2] '} Same resolution + same day (burst/transfer duplicates)
+                {'[2] '} Burst sequence — ≥3 photos within 5 seconds of each other
               </Text>
               <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
-                {'[i] '} Newest copy is pre-selected as KEEP
+                {'[3] '} Same resolution + same day — backup/transfer duplicates
               </Text>
               <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
-                {'[i] '} Real file sizes fetched for top groups
+                {'[✓] '} Partial hash (32 KB) verifies top dimension matches
+              </Text>
+              <Text style={[styles.infoLine, { color: colors.mutedForeground }]}>
+                {'[i] '} Best copy pre-selected as KEEP — you control all deletions
               </Text>
             </View>
             <Pressable onPress={startScan} style={styles.fullWidth} accessibilityLabel="Start duplicate scan" accessibilityRole="button">
@@ -490,13 +585,27 @@ export default function DuplicateFinderScreen() {
                     {/* Group header */}
                     <View style={[styles.groupHeader, { borderBottomColor: colors.border }]}>
                       <View style={[styles.matchBadge, {
-                        backgroundColor: group.matchType === 'filename' ? colors.primary + '20' : colors.warning + '20',
-                        borderColor: group.matchType === 'filename' ? colors.primary : colors.warning,
+                        backgroundColor:
+                          group.matchType === 'filename' ? colors.primary + '20' :
+                          group.matchType === 'burst' ? '#BB55FF20' :
+                          group.hashVerified ? colors.success + '20' :
+                          colors.warning + '20',
+                        borderColor:
+                          group.matchType === 'filename' ? colors.primary :
+                          group.matchType === 'burst' ? '#BB55FF' :
+                          group.hashVerified ? colors.success :
+                          colors.warning,
                       }]}>
                         <Text style={[styles.matchBadgeText, {
-                          color: group.matchType === 'filename' ? colors.primary : colors.warning,
+                          color:
+                            group.matchType === 'filename' ? colors.primary :
+                            group.matchType === 'burst' ? '#BB55FF' :
+                            group.hashVerified ? colors.success :
+                            colors.warning,
                         }]}>
-                          {group.matchType === 'filename' ? 'FILENAME' : 'DIM+DATE'}
+                          {group.matchType === 'filename' ? 'FILENAME' :
+                           group.matchType === 'burst' ? 'BURST' :
+                           group.hashVerified ? 'HASH VERIFIED' : 'DIM+DATE'}
                         </Text>
                       </View>
                       <Text style={[styles.groupName, { color: colors.foreground }]} numberOfLines={1}>

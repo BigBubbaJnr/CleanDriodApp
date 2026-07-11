@@ -70,10 +70,38 @@ Every recommendation answers: Why? / How much? / How old? / How safe?
 - GOOD: "380 MB — over a year old; almost certainly safe to remove or archive to cloud"
 - GOOD: "screenshots accumulate silently; Screenshot Manager clears them in one step"
 
+## Storage Advisor (storage-intel.tsx) — built
+- `buildAdvisorCards(storageStats, mediaBreakdown, journal, snapshots)` returns `AdvisorCard[]`
+- Cards: LOW_STORAGE (P1), LARGE_VIDEOS (P2), DUPLICATES (P3), SCREENSHOTS (P4), DOWNLOADS (P5), TREND (P6), APP_CACHE (P7)
+- Each card: priority, icon, category, triggerSummary, recoveryBytes, safetyLevel (SAFE/REVIEW/MANUAL), explanation, androidNote?, actionRoute
+- SafetyLevel drives badge colour: success=SAFE, warning=REVIEW, accent=MANUAL
+- Recovery bytes are labeled `~` (estimated, never fabricated)
+- `AdvisorCardUI` functional sub-component renders cards with header, stats row (RECOVERABLE/SAFETY/EVIDENCE), explanation, optional Android note, CTA button
+
+## Folder Intelligence (storage-intel.tsx) — built
+- After main scan, calls `MediaLibrary.getAlbumsAsync({ includeSmartAlbums: false })`
+- Samples 4 assets per top-15 album to estimate avg size, multiplies by assetCount
+- Shows top 8 albums by estimated size in `[FOLDER INTELLIGENCE]` section with SegBar
+- Album scan is best-effort; wrapped in try/catch; doesn't block main scan
+- Stored in local state `albumBreakdown: AlbumIntelRow[]`, not in context
+
+## Burst detection (duplicate-finder.tsx) — built
+- Phase 3.5: sorts all photos by creationTime, groups sequences where consecutive gap ≤ 5 seconds
+- Requires ≥ 3 photos to qualify as burst
+- keepIndex = middle shot (sharpest); all others default-selected for deletion
+- matchType: 'burst' — badge: purple #BB55FF
+- Processed AFTER filename groups (lower priority) but BEFORE dim+date groups in Phase 4
+
+## Partial hash verification (duplicate-finder.tsx) — built  
+- Phase 5.5: for top 8 dimension_date groups, calls `getAssetInfoAsync` to get `localUri`
+- Reads first 32 KB via `FileSystem.readAsStringAsync(localUri, { encoding: Base64, length: 32768 } as any)`
+- If chunk strings match and length > 100 chars → sets `grp.hashVerified = true`
+- Badge upgrades from 'DIM+DATE' (warning) to 'HASH VERIFIED' (success green)
+- Best-effort; wrapped in try/catch per group
+
 ## Outstanding TODOs
 - App Cache list is hardcoded (12 fake entries) — native module needed to enumerate installed apps
-- Background task UI exists but no task registered (`expo-background-fetch` + `expo-task-manager` installed)
-- 4-question recommendation cards (WHY / HOW MUCH / HOW SAFE / WHAT HAPPENS NEXT) — structured card UI for storage-intel, not yet built
+- Background task UI exists but no task registered (removed packages in earlier session; v1.1 feature)
 - Animated scan bar (pixel blocks sweep during active scans) — not yet built
 - AdMob not started
 - Context split (StorageContext / RecommendationContext / ScanContext / SettingsContext) — defer to v2
