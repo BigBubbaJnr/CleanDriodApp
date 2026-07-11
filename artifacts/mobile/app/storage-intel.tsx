@@ -28,6 +28,9 @@ import {
   estimateVideoSize,
 } from '@/context/CleanerContext';
 import type { ScanJournalEntry } from '@/context/CleanerContext';
+import { POOL_CONCURRENCY } from '@/constants/limits';
+import { logError } from '@/utils/logger';
+import { runWithPool } from '@/utils/pool';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, formatDelta, formatAbsoluteDate, daysAgoLabel, getAgeText } from '@/utils/format';
 import SegBar from '@/components/SegBar';
@@ -406,7 +409,7 @@ export default function StorageIntelScreen() {
   const insets = useSafeAreaInsets();
   const {
     storageStats, mediaBreakdown, richScanData, snapshots,
-    scanMediaLibrary, addScanSnapshot,
+    scanMediaLibrary, addScanSnapshot, scanTruncated,
     journal,
   } = useCleaner();
 
@@ -465,51 +468,49 @@ export default function StorageIntelScreen() {
         setProgress(85);
 
         const albumData: AlbumIntelRow[] = [];
-        await Promise.all(topAlbums.map(async (album) => {
-          try {
-            // Fetch 12 assets sorted DESC (most recent first) — better
-            // recency detection than oldest-first sampling with 4 items.
-            const { assets } = await MediaLibrary.getAssetsAsync({
-              album: album.id,
-              first: 12,
-              mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
-              sortBy: [[MediaLibrary.SortBy.creationTime, false]] as any,
-            });
-            if (assets.length === 0) return;
+        await runWithPool(topAlbums, async (album) => {
+          // Fetch 12 assets sorted DESC (most recent first) — better
+          // recency detection than oldest-first sampling with 4 items.
+          const { assets } = await MediaLibrary.getAssetsAsync({
+            album: album.id,
+            first: 12,
+            mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video],
+            sortBy: [[MediaLibrary.SortBy.creationTime, false]] as any,
+          });
+          if (assets.length === 0) return;
 
-            let sampleTotal = 0;
-            let oldestTime: number | undefined;
-            let newestTime: number | undefined;
-            const staleThreshold = Date.now() / 1000 - 180 * 86400; // 180 days ago
-            for (const asset of assets) {
-              const s = asset.mediaType === MediaLibrary.MediaType.video
-                ? estimateVideoSize(asset.duration)
-                : estimateImageSize(asset.width, asset.height);
-              sampleTotal += s;
-              if (!oldestTime || asset.creationTime < oldestTime) oldestTime = asset.creationTime;
-              if (!newestTime || asset.creationTime > newestTime) newestTime = asset.creationTime;
-            }
-            const avgSize = sampleTotal / assets.length;
-            // Album is stale when even the most recently sampled asset is >180 days old
-            const isStale = newestTime !== undefined && newestTime < staleThreshold;
+          let sampleTotal = 0;
+          let oldestTime: number | undefined;
+          let newestTime: number | undefined;
+          const staleThreshold = Date.now() / 1000 - 180 * 86400; // 180 days ago
+          for (const asset of assets) {
+            const s = asset.mediaType === MediaLibrary.MediaType.video
+              ? estimateVideoSize(asset.duration)
+              : estimateImageSize(asset.width, asset.height);
+            sampleTotal += s;
+            if (!oldestTime || asset.creationTime < oldestTime) oldestTime = asset.creationTime;
+            if (!newestTime || asset.creationTime > newestTime) newestTime = asset.creationTime;
+          }
+          const avgSize = sampleTotal / assets.length;
+          // Album is stale when even the most recently sampled asset is >180 days old
+          const isStale = newestTime !== undefined && newestTime < staleThreshold;
 
-            albumData.push({
-              id: album.id,
-              title: album.title,
-              assetCount: album.assetCount,
-              estimatedSize: Math.round(avgSize * album.assetCount),
-              oldestAssetDate: oldestTime,
-              newestAssetDate: newestTime,
-              isStale,
-            });
-          } catch { /* skip inaccessible album */ }
-        }));
+          albumData.push({
+            id: album.id,
+            title: album.title,
+            assetCount: album.assetCount,
+            estimatedSize: Math.round(avgSize * album.assetCount),
+            oldestAssetDate: oldestTime,
+            newestAssetDate: newestTime,
+            isStale,
+          });
+        }, POOL_CONCURRENCY);
 
         albumData.sort((a, b) => b.estimatedSize - a.estimatedSize);
         setAlbumBreakdown(albumData.slice(0, 12));
         addLog(`folder analysis: ${albumData.length} folder${albumData.length !== 1 ? 's' : ''} mapped`);
-      } catch {
-        // Folder scan is best-effort — silently skip on failure
+      } catch (err) {
+        logError('storage-intel/albumScan', err);
       }
     }
 
@@ -676,6 +677,15 @@ export default function StorageIntelScreen() {
         {/* ── Post-scan results ── */}
         {mediaBreakdown && !scanning && (
           <Animated.View entering={FadeIn} style={{ gap: 10 }}>
+            {/* Truncation banner — shown when the global scan cap was hit */}
+            {scanTruncated && (
+              <View style={[styles.truncBanner, { backgroundColor: colors.warning + '18', borderColor: colors.warning }]}>
+                <Feather name="alert-triangle" size={12} color={colors.warning} />
+                <Text style={[styles.truncText, { color: colors.warning }]}>
+                  {'[!] RESULTS CAPPED — LIBRARY TOO LARGE FOR A SINGLE SCAN · RE-SCAN TO CYCLE'}
+                </Text>
+              </View>
+            )}
             {/* Last scanned */}
             {mediaBreakdown.lastScanned && (
               <Text style={[styles.lastScanned, { color: colors.mutedForeground }]}>
@@ -1026,6 +1036,12 @@ const styles = StyleSheet.create({
   catBottomRow: { flexDirection: 'row', alignItems: 'center' },
   catCount: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
   catSize: { fontSize: 10, fontFamily: 'Inter_700Bold' },
+
+  truncBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    padding: 10, borderWidth: 1,
+  },
+  truncText: { flex: 1, fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 0.8, lineHeight: 14 },
 
   noteBox: { borderWidth: 1, padding: 12, gap: 6 },
   noteTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },

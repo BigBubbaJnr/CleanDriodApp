@@ -17,12 +17,13 @@
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
+import { HASH_CACHE_MAX } from '@/constants/limits';
+import { logError } from '@/utils/logger';
 
 /** Bytes read per fingerprint (64 KB — sufficient to uniquely identify any photo/video) */
 export const FINGERPRINT_CHUNK_BYTES = 65_536;
 
 const CACHE_STORAGE_KEY = 'cleandroid_hash_cache_v2';
-const MAX_CACHE_ENTRIES  = 2000;
 
 interface CacheEntry {
   fingerprint: string;
@@ -47,7 +48,8 @@ async function ensureCacheLoaded(): Promise<Map<string, CacheEntry>> {
     } else {
       _cache = new Map();
     }
-  } catch {
+  } catch (err) {
+    logError('hash/load', err);
     _cache = new Map();
   }
   return _cache;
@@ -56,6 +58,9 @@ async function ensureCacheLoaded(): Promise<Map<string, CacheEntry>> {
 /**
  * Look up a cached fingerprint for an asset.
  * Returns null if not cached or if creationTime differs (file changed).
+ *
+ * On a hit, the entry is promoted to the Map tail (LRU behaviour) so the
+ * least-recently-used entry is always at the head when eviction runs.
  */
 export async function getCachedFingerprint(
   assetId: string,
@@ -64,6 +69,9 @@ export async function getCachedFingerprint(
   const cache = await ensureCacheLoaded();
   const entry = cache.get(assetId);
   if (!entry || entry.creationTime !== creationTime) return null;
+  // LRU promotion: delete + re-insert moves the key to Map tail
+  cache.delete(assetId);
+  cache.set(assetId, entry);
   return entry.fingerprint;
 }
 
@@ -89,16 +97,19 @@ export async function setCachedFingerprint(
 export async function persistFingerprintCache(): Promise<void> {
   if (!_dirty || !_cache) return;
   try {
-    // LRU eviction: Map preserves insertion order — trim oldest entries first
-    if (_cache.size > MAX_CACHE_ENTRIES) {
-      const toDelete = Array.from(_cache.keys()).slice(0, _cache.size - MAX_CACHE_ENTRIES);
+    // LRU eviction: Map preserves insertion order — head = oldest (least recently used)
+    if (_cache.size > HASH_CACHE_MAX) {
+      const excess = _cache.size - HASH_CACHE_MAX;
+      const toDelete = Array.from(_cache.keys()).slice(0, excess);
       toDelete.forEach(k => _cache!.delete(k));
     }
     const obj: Record<string, CacheEntry> = {};
     _cache.forEach((v, k) => { obj[k] = v; });
     await AsyncStorage.setItem(CACHE_STORAGE_KEY, JSON.stringify(obj));
     _dirty = false;
-  } catch { /* cache loss is non-critical */ }
+  } catch (err) {
+    logError('hash/persist', err);
+  }
 }
 
 /**
@@ -126,7 +137,8 @@ export async function computeFileFingerprint(localUri: string): Promise<string |
     // Require at least 1 KB of content — tiny files are not reliable fingerprints
     if (!chunk || chunk.length < 1024) return null;
     return chunk;
-  } catch {
+  } catch (err) {
+    logError('hash/fingerprint', err);
     return null;
   }
 }

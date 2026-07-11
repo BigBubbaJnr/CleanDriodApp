@@ -3,6 +3,9 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { Platform } from 'react-native';
+import { SCAN_CAP_GLOBAL, POOL_CONCURRENCY, SNAPSHOT_MAX, JOURNAL_MAX, HISTORY_MAX } from '@/constants/limits';
+import { logError } from '@/utils/logger';
+import { runWithPool } from '@/utils/pool';
 
 export interface CleanHistoryItem {
   id: string;
@@ -102,66 +105,13 @@ export async function getRealFileSize(uri: string): Promise<number | null> {
 }
 
 // ── Storage Intelligence Engine — source app types & rich scan data ───────────
+// Types live in sourceApps.ts; re-exported here for backward compatibility.
 
-export type SourceApp =
-  | 'camera' | 'whatsapp' | 'telegram' | 'instagram' | 'snapchat'
-  | 'tiktok' | 'twitter' | 'facebook' | 'signal' | 'discord'
-  | 'screen_recording' | 'screenshots' | 'downloads' | 'other';
-
-export const SOURCE_APP_META: Record<SourceApp, { label: string; icon: string }> = {
-  camera:           { label: 'Camera',            icon: 'camera' },
-  whatsapp:         { label: 'WhatsApp',           icon: 'message-circle' },
-  telegram:         { label: 'Telegram',           icon: 'send' },
-  instagram:        { label: 'Instagram',          icon: 'aperture' },
-  snapchat:         { label: 'Snapchat',           icon: 'zap' },
-  tiktok:           { label: 'TikTok',             icon: 'video' },
-  twitter:          { label: 'Twitter / X',        icon: 'at-sign' },
-  facebook:         { label: 'Facebook',           icon: 'users' },
-  signal:           { label: 'Signal',             icon: 'lock' },
-  discord:          { label: 'Discord',            icon: 'hash' },
-  screen_recording: { label: 'Screen Recordings',  icon: 'play-circle' },
-  screenshots:      { label: 'Screenshots',        icon: 'monitor' },
-  downloads:        { label: 'Downloads',          icon: 'download' },
-  other:            { label: 'Other Media',        icon: 'folder' },
-};
-
-export interface RichAsset {
-  id: string;
-  filename: string;
-  uri: string;
-  mediaType: 'photo' | 'video' | 'audio';
-  width: number;
-  height: number;
-  /** Seconds */
-  duration: number;
-  /** Seconds since epoch — from MediaLibrary creationTime */
-  creationTime: number;
-  /** Seconds since epoch — from MediaLibrary modificationTime (0 if unavailable) */
-  modificationTime: number;
-  estimatedSize: number;
-  sourceApp: SourceApp;
-  isScreenshot: boolean;
-  isDownload: boolean;
-}
-
-export interface SmartCategory {
-  sourceApp: SourceApp;
-  label: string;
-  /** Feather icon name */
-  icon: string;
-  count: number;
-  estimatedSize: number;
-}
-
-export interface RichScanData {
-  /** ISO timestamp when this scan was taken */
-  timestamp: string;
-  /** All scanned assets, sorted by estimatedSize desc (capped at 3000) */
-  assets: RichAsset[];
-  totalAssetCount: number;
-  /** Grouped by source app, sorted by estimatedSize desc */
-  smartCategories: SmartCategory[];
-}
+export type { SourceApp, RichAsset, SmartCategory, RichScanData } from './sourceApps';
+export { SOURCE_APP_META } from './sourceApps';
+// Local aliases for internal use in this file
+import type { SourceApp, RichAsset, SmartCategory, RichScanData } from './sourceApps';
+import { SOURCE_APP_META } from './sourceApps';
 
 interface CleanerContextType {
   storageStats: StorageStats | null;
@@ -169,6 +119,8 @@ interface CleanerContextType {
   isStatsError: boolean;
   mediaBreakdown: MediaBreakdown | null;
   richScanData: RichScanData | null;
+  /** True when the last scan hit SCAN_CAP_GLOBAL and results were truncated */
+  scanTruncated: boolean;
   snapshots: ScanSnapshot[];
   history: CleanHistoryItem[];
   totalBytesFreed: number;
@@ -219,6 +171,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   const [isStatsError, setIsStatsError] = useState(false);
   const [mediaBreakdown, setMediaBreakdown] = useState<MediaBreakdown | null>(null);
   const [richScanData, setRichScanData] = useState<RichScanData | null>(null);
+  const [scanTruncated, setScanTruncated] = useState(false);
   const [snapshots, setSnapshots] = useState<ScanSnapshot[]>([]);
   const [journal, setJournal] = useState<ScanJournalEntry[]>([]);
   const [history, setHistory] = useState<CleanHistoryItem[]>([]);
@@ -236,7 +189,8 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
         getOwnCacheSize(),
       ]);
       setStorageStats({ totalSpace, usedSpace: totalSpace - freeSpace, freeSpace, appCacheSize });
-    } catch {
+    } catch (err) {
+      logError('refreshStats', err);
       // Android filesystem APIs unavailable (e.g. web preview, restricted sandbox).
       // Leave storageStats as null — never fabricate storage numbers.
       setIsStatsError(true);
@@ -282,7 +236,11 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
         batchNum++;
         onProgress?.(Math.min(40, 5 + batchNum * 10));
         onLog?.(`loaded ${allAssets.length} media items...`);
-      } while (after && allAssets.length < 3000);
+      } while (after && allAssets.length < SCAN_CAP_GLOBAL);
+
+      const wasTruncated = !!after; // still had pages after hitting the cap
+      setScanTruncated(wasTruncated);
+      if (wasTruncated) onLog?.(`[!] large library — results capped at ${SCAN_CAP_GLOBAL}`);
 
       onProgress?.(50);
       onLog?.('finding albums...');
@@ -391,20 +349,18 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
           { pattern: 'facebook',       app: 'facebook' },
         ];
 
-        // Fetch one page (≤2000 assets) per matched album, in parallel
-        await Promise.all(namedApps.map(async ({ pattern, app }) => {
+        // Fetch one page (≤2000 assets) per matched album, concurrency-limited
+        await runWithPool(namedApps, async ({ pattern, app }) => {
           const match = albums.find(a => a.title.toLowerCase().includes(pattern));
           if (!match || match.assetCount === 0) return;
-          try {
-            const page = await MediaLibrary.getAssetsAsync({
-              first: 2000, album: match,
-              mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video, MediaLibrary.MediaType.audio],
-            });
-            page.assets.forEach(a => {
-              if (!sourceMap.has(a.id)) sourceMap.set(a.id, app);
-            });
-          } catch { /* skip inaccessible album */ }
-        }));
+          const page = await MediaLibrary.getAssetsAsync({
+            first: 2000, album: match,
+            mediaType: [MediaLibrary.MediaType.photo, MediaLibrary.MediaType.video, MediaLibrary.MediaType.audio],
+          });
+          page.assets.forEach(a => {
+            if (!sourceMap.has(a.id)) sourceMap.set(a.id, app);
+          });
+        }, POOL_CONCURRENCY);
 
         // Build RichAsset[] — annotate every scanned asset with its sourceApp
         const richAssets: RichAsset[] = allAssets.map(a => {
@@ -468,12 +424,14 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
         });
 
         onLog?.(`source analysis: ${smartCategories.length} app categor${smartCategories.length !== 1 ? 'ies' : 'y'} detected`);
-      } catch {
+      } catch (err) {
+        logError('richScanData', err);
         // Rich scan data is best-effort — breakdown result is unaffected
       }
 
       return breakdown;
     } catch (e) {
+      logError('scanMediaLibrary', e);
       onLog?.(`[!] scan error: ${String(e)}`);
       return null;
     }
@@ -485,7 +443,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       id: Date.now().toString() + Math.random().toString(36).slice(2, 6),
     };
     setSnapshots(prev => {
-      const updated = [newSnap, ...prev].slice(0, 30);
+      const updated = [newSnap, ...prev].slice(0, SNAPSHOT_MAX);
       AsyncStorage.setItem(STORAGE_KEYS.SNAPSHOTS, JSON.stringify(updated));
       return updated;
     });
@@ -498,7 +456,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
         id: Date.now().toString() + Math.random().toString(36).slice(2, 7),
         scanNumber: prev.length + 1,
       };
-      const updated = [newEntry, ...prev].slice(0, 100);
+      const updated = [newEntry, ...prev].slice(0, JOURNAL_MAX);
       AsyncStorage.setItem(STORAGE_KEYS.JOURNAL, JSON.stringify(updated));
       return updated;
     });
@@ -520,7 +478,9 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       if (freedRaw) setTotalBytesFreed(Number(freedRaw));
       if (snapsRaw) setSnapshots(JSON.parse(snapsRaw));
       if (journalRaw) setJournal(JSON.parse(journalRaw));
-    } catch {}
+    } catch (err) {
+      logError('loadPersisted', err);
+    }
   }, []);
 
   useEffect(() => {
@@ -534,7 +494,7 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
       id: Date.now().toString() + Math.random().toString(36).slice(2, 7),
     };
     setHistory(prev => {
-      const updated = [newItem, ...prev].slice(0, 50);
+      const updated = [newItem, ...prev].slice(0, HISTORY_MAX);
       AsyncStorage.setItem(STORAGE_KEYS.HISTORY, JSON.stringify(updated));
       return updated;
     });
@@ -560,13 +520,13 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const contextValue = useMemo(() => ({
-    storageStats, isLoadingStats, isStatsError, mediaBreakdown, richScanData, snapshots,
-    history, totalBytesFreed, scheduleSettings, rootEnabled,
+    storageStats, isLoadingStats, isStatsError, mediaBreakdown, richScanData, scanTruncated,
+    snapshots, history, totalBytesFreed, scheduleSettings, rootEnabled,
     journal, refreshStats, scanMediaLibrary, addScanSnapshot,
     addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
   }), [
-    storageStats, isLoadingStats, isStatsError, mediaBreakdown, richScanData, snapshots,
-    history, totalBytesFreed, scheduleSettings, rootEnabled,
+    storageStats, isLoadingStats, isStatsError, mediaBreakdown, richScanData, scanTruncated,
+    snapshots, history, totalBytesFreed, scheduleSettings, rootEnabled,
     journal, refreshStats, scanMediaLibrary, addScanSnapshot,
     addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
   ]);

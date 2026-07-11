@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
@@ -8,6 +8,7 @@ import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
 import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getErrorLog, clearErrorLog } from '@/utils/logger';
 
 // Update these before Play Store submission
 const PRIVACY_POLICY_URL = 'https://cleandroid.app/privacy';
@@ -47,6 +48,8 @@ export default function SettingsScreen() {
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
+  const [errorLogOpen, setErrorLogOpen] = useState(false);
+
   const handleRootToggle = (val: boolean) => {
     if (val) {
       Alert.alert(
@@ -62,6 +65,8 @@ export default function SettingsScreen() {
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
   };
+
+  const errorLog = getErrorLog();
 
   return (
     <ScrollView
@@ -175,6 +180,86 @@ export default function SettingsScreen() {
           {'> '} CleanDroid will always be free. Every feature. No "Pro" tier, no membership, no locked tools. Ever.
         </Text>
       </View>
+
+      {/* Error log — shown only when there are entries */}
+      {errorLog.length > 0 && (
+        <>
+          <Text style={[styles.sectionLabel, { color: colors.primary }]}>
+            {'── DIAGNOSTICS ──────────────────────'}
+          </Text>
+          <View style={[styles.panel, {
+            backgroundColor: colors.card,
+            borderTopColor: colors.bevelLight,
+            borderLeftColor: colors.bevelLight,
+            borderBottomColor: colors.bevelDark,
+            borderRightColor: colors.bevelDark,
+          }]}>
+            {/* Collapsible header row */}
+            <Pressable
+              style={[styles.errorLogHeader, { borderBottomColor: errorLogOpen ? colors.border : 'transparent' }]}
+              onPress={() => {
+                setErrorLogOpen(v => !v);
+                Haptics.selectionAsync();
+              }}
+              accessibilityLabel={errorLogOpen ? 'Collapse error log' : 'Expand error log'}
+              accessibilityRole="button"
+            >
+              <Feather name="alert-triangle" size={13} color={colors.destructive} />
+              <Text style={[styles.errorLogTitle, { color: colors.destructive }]}>
+                {'[ERROR LOG]'}
+              </Text>
+              <Text style={[styles.errorLogCount, { color: colors.mutedForeground }]}>
+                {errorLog.length} ENTR{errorLog.length === 1 ? 'Y' : 'IES'}
+              </Text>
+              <Text style={[styles.arrow, { color: colors.mutedForeground }]}>
+                {errorLogOpen ? '↑' : '↓'}
+              </Text>
+            </Pressable>
+
+            {errorLogOpen && (
+              <View style={styles.errorLogBody}>
+                {errorLog.map((entry, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      styles.errorEntry,
+                      { borderBottomColor: colors.border },
+                      i === errorLog.length - 1 && { borderBottomWidth: 0 },
+                    ]}
+                  >
+                    <Text style={[styles.errorTimestamp, { color: colors.mutedForeground }]}>
+                      {entry.timestamp.slice(11, 19)}
+                    </Text>
+                    <Text style={[styles.errorTag, { color: colors.destructive }]}>
+                      [{entry.tag}]
+                    </Text>
+                    <Text style={[styles.errorMsg, { color: colors.foreground }]} numberOfLines={2}>
+                      {entry.message}
+                    </Text>
+                  </View>
+                ))}
+
+                {/* Clear button */}
+                <Pressable
+                  style={[styles.clearLogBtn, { borderTopColor: colors.border }]}
+                  onPress={() => {
+                    clearErrorLog();
+                    setErrorLogOpen(false);
+                    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+                  }}
+                  accessibilityLabel="Clear error log"
+                  accessibilityRole="button"
+                >
+                  <Feather name="trash-2" size={12} color={colors.destructive} />
+                  <Text style={[styles.clearLogText, { color: colors.destructive }]}>
+                    {'>> CLEAR LOG'}
+                  </Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -207,9 +292,30 @@ const styles = StyleSheet.create({
   sysValue: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5, marginTop: 2 },
   arrow: { fontSize: 14, fontFamily: 'Inter_700Bold' },
   pledgeBox: {
-    padding: 16, gap: 8,
+    padding: 16, gap: 8, marginBottom: 20,
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
   },
   pledgeTitle: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
   pledgeText: { fontSize: 11, fontFamily: 'Inter_400Regular', lineHeight: 18 },
+
+  // Error log styles
+  errorLogHeader: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    padding: 13, borderBottomWidth: 1,
+  },
+  errorLogTitle: { flex: 1, fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
+  errorLogCount: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
+  errorLogBody: { paddingVertical: 4 },
+  errorEntry: {
+    paddingHorizontal: 13, paddingVertical: 8,
+    borderBottomWidth: 1, gap: 2,
+  },
+  errorTimestamp: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
+  errorTag: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  errorMsg: { fontSize: 10, fontFamily: 'Inter_400Regular', lineHeight: 14 },
+  clearLogBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: 6, padding: 12, borderTopWidth: 1,
+  },
+  clearLogText: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
 });

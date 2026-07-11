@@ -25,6 +25,9 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, getRealFileSize } from '@/context/CleanerContext';
+import { SCAN_CAP_TOOL, POOL_CONCURRENCY } from '@/constants/limits';
+import { logError } from '@/utils/logger';
+import { runWithPool } from '@/utils/pool';
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, getAgeText, formatDateShort } from '@/utils/format';
@@ -109,6 +112,7 @@ export default function DuplicateFinderScreen() {
   const [scanProgress, setScanProgress] = useState(0);
   const [scanLog, setScanLog] = useState<string[]>([]);
   const [bytesFreed, setBytesFreed] = useState(0);
+  const [scanWasTruncated, setScanWasTruncated] = useState(false);
 
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
@@ -161,9 +165,11 @@ export default function DuplicateFinderScreen() {
       if (allPhotos.length % 500 === 0 && allPhotos.length > 0) {
         addLog(`loaded ${allPhotos.length} photos...`);
       }
-    } while (cursor && allPhotos.length < 5000);
+    } while (cursor && allPhotos.length < SCAN_CAP_TOOL);
 
-    if (cursor) addLog(`[!] large library — checked first ${allPhotos.length} photos`);
+    const wasTruncated = !!cursor;
+    setScanWasTruncated(wasTruncated);
+    if (wasTruncated) addLog(`[!] large library — checked first ${allPhotos.length} photos`);
     addLog(`total: ${allPhotos.length} photos loaded`);
     setScanProgress(45);
 
@@ -334,7 +340,7 @@ export default function DuplicateFinderScreen() {
 
     // ── Phase 5: Get real file sizes for group representatives ─────────────
     addLog(`getting real sizes for ${topGroups.length} groups...`);
-    await Promise.all(topGroups.map(async (grp) => {
+    await runWithPool(topGroups, async (grp) => {
       const repUri = grp.uris[grp.keepIndex] || grp.uris[0];
       if (!repUri) return;
       const real = await getRealFileSize(repUri);
@@ -343,7 +349,7 @@ export default function DuplicateFinderScreen() {
         grp.sizeIsReal = true;
         grp.wasted = real * (grp.count - 1);
       }
-    }));
+    }, POOL_CONCURRENCY);
 
     // Re-sort after real sizes
     topGroups.sort((a, b) => b.wasted - a.wasted);
@@ -361,68 +367,66 @@ export default function DuplicateFinderScreen() {
       addLog(`verifying ${verifyTargets.length} groups (${cacheSize} cached)...`);
       let cacheHits = 0;
 
-      await Promise.all(verifyTargets.map(async (grp) => {
-        try {
-          const idKeep = grp.assetIds[grp.keepIndex];
-          const selectedIds = Array.from(grp.selectedIndexes)
-            .map(i => grp.assetIds[i])
-            .filter(Boolean) as string[];
-          if (selectedIds.length === 0 || !idKeep) return;
+      await runWithPool(verifyTargets, async (grp) => {
+        const idKeep = grp.assetIds[grp.keepIndex];
+        const selectedIds = Array.from(grp.selectedIndexes)
+          .map(i => grp.assetIds[i])
+          .filter(Boolean) as string[];
+        if (selectedIds.length === 0 || !idKeep) return;
 
-          // Fetch asset info for keep + all selected copies (localUri + isFavorite)
-          const [infoKeep, ...infoSelected] = await Promise.all([
-            MediaLibrary.getAssetInfoAsync(idKeep).catch(() => null),
-            ...selectedIds.map(id => MediaLibrary.getAssetInfoAsync(id).catch(() => null)),
-          ]);
+        // Fetch asset info for keep + all selected copies (localUri + isFavorite)
+        const [infoKeep, ...infoSelected] = await Promise.all([
+          MediaLibrary.getAssetInfoAsync(idKeep).catch(() => null),
+          ...selectedIds.map(id => MediaLibrary.getAssetInfoAsync(id).catch(() => null)),
+        ]);
 
-          // ── Favourites protection ─────────────────────────────────────────
-          // Any selected asset marked as a Gallery favourite is silently
-          // removed from the deletion set. The group remains visible with
-          // a ★ PROTECTED badge — the user can still override manually.
-          const newSelected = new Set(grp.selectedIndexes);
-          let groupProtected = false;
-          infoSelected.forEach((info, i) => {
-            if (info?.isFavorite) {
-              const idx = grp.assetIds.indexOf(selectedIds[i]);
-              if (idx >= 0) { newSelected.delete(idx); groupProtected = true; }
-            }
-          });
-          if (groupProtected) {
-            grp.hasFavorite = true;
-            grp.selectedIndexes = newSelected;
+        // ── Favourites protection ─────────────────────────────────────────
+        // Any selected asset marked as a Gallery favourite is silently
+        // removed from the deletion set. The group remains visible with
+        // a ★ PROTECTED badge — the user can still override manually.
+        const newSelected = new Set(grp.selectedIndexes);
+        let groupProtected = false;
+        infoSelected.forEach((info, i) => {
+          if (info?.isFavorite) {
+            const idx = grp.assetIds.indexOf(selectedIds[i]);
+            if (idx >= 0) { newSelected.delete(idx); groupProtected = true; }
           }
+        });
+        if (groupProtected) {
+          grp.hasFavorite = true;
+          grp.selectedIndexes = newSelected;
+        }
 
-          // ── Content fingerprint comparison ────────────────────────────────
-          // Compare the keep copy against the first selected copy.
-          // A 64 KB Base64 match is a definitive content-identical confirmation.
-          const idDelete    = selectedIds[0];
-          const infoDelete  = infoSelected[0];
-          const uriKeep     = infoKeep?.localUri;
-          const uriDelete   = infoDelete?.localUri;
-          if (!uriKeep || !uriDelete || uriKeep === uriDelete) return;
+        // ── Content fingerprint comparison ────────────────────────────────
+        // Compare the keep copy against the first selected copy.
+        // A 64 KB Base64 match is a definitive content-identical confirmation.
+        const idDelete    = selectedIds[0];
+        const infoDelete  = infoSelected[0];
+        const uriKeep     = infoKeep?.localUri;
+        const uriDelete   = infoDelete?.localUri;
+        if (!uriKeep || !uriDelete || uriKeep === uriDelete) return;
 
-          const crKeep   = grp.creationTimes[grp.keepIndex] ?? 0;
-          const crDelete = grp.creationTimes[grp.assetIds.indexOf(idDelete)] ?? 0;
+        const crKeep   = grp.creationTimes[grp.keepIndex] ?? 0;
+        const crDelete = grp.creationTimes[grp.assetIds.indexOf(idDelete)] ?? 0;
 
-          let fpKeep = await getCachedFingerprint(idKeep, crKeep);
-          if (fpKeep) { cacheHits++; }
-          else {
-            fpKeep = await computeFileFingerprint(uriKeep);
-            if (fpKeep) await setCachedFingerprint(idKeep, crKeep, fpKeep);
-          }
+        let fpKeep = await getCachedFingerprint(idKeep, crKeep);
+        if (fpKeep) { cacheHits++; }
+        else {
+          fpKeep = await computeFileFingerprint(uriKeep);
+          if (fpKeep) await setCachedFingerprint(idKeep, crKeep, fpKeep);
+        }
 
-          let fpDelete = await getCachedFingerprint(idDelete, crDelete);
-          if (fpDelete) { cacheHits++; }
-          else {
-            fpDelete = await computeFileFingerprint(uriDelete);
-            if (fpDelete) await setCachedFingerprint(idDelete, crDelete, fpDelete);
-          }
+        let fpDelete = await getCachedFingerprint(idDelete, crDelete);
+        if (fpDelete) { cacheHits++; }
+        else {
+          fpDelete = await computeFileFingerprint(uriDelete);
+          if (fpDelete) await setCachedFingerprint(idDelete, crDelete, fpDelete);
+        }
 
-          if (fpKeep && fpDelete && fpKeep.length > 1000 && fpKeep === fpDelete) {
-            grp.hashVerified = true;
-          }
-        } catch { /* verification is best-effort — never blocks the scan */ }
-      }));
+        if (fpKeep && fpDelete && fpKeep.length > 1000 && fpKeep === fpDelete) {
+          grp.hashVerified = true;
+        }
+      }, POOL_CONCURRENCY);
 
       // Persist new fingerprints so the next scan can skip file reads
       await persistFingerprintCache();
@@ -481,7 +485,9 @@ export default function DuplicateFinderScreen() {
         await MediaLibrary.deleteAssetsAsync(toDelete);
         bytesActuallyFreed = totalSelectedBytes;
         itemsRemoved = toDelete.length;
-      } catch {}
+      } catch (err) {
+        logError('duplicates/delete', err);
+      }
     }
 
     await sleep(800);
@@ -619,6 +625,16 @@ export default function DuplicateFinderScreen() {
         {/* ── RESULTS ── */}
         {(phase === 'results' || phase === 'cleaning') && (
           <Animated.View entering={FadeIn} style={{ gap: 10 }}>
+            {/* Truncation banner */}
+            {scanWasTruncated && (
+              <View style={[styles.truncBanner, { backgroundColor: colors.warning + '18', borderColor: colors.warning }]}>
+                <Feather name="alert-triangle" size={12} color={colors.warning} />
+                <Text style={[styles.truncText, { color: colors.warning }]}>
+                  {'[!] LARGE LIBRARY — RESULTS CAPPED — RESCAN TO CYCLE THROUGH REMAINING PHOTOS'}
+                </Text>
+              </View>
+            )}
+
             {/* Summary */}
             <View style={[styles.summaryPanel, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.summaryHead, { color: accentGreen }]}>{'[SCAN COMPLETE]'}</Text>
@@ -841,6 +857,12 @@ const styles = StyleSheet.create({
   scanPct: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
 
   logLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 5 },
+
+  truncBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    padding: 10, borderWidth: 1, marginBottom: 4,
+  },
+  truncText: { flex: 1, fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 0.8, lineHeight: 14 },
 
   summaryPanel: { padding: 14, gap: 6 },
   summaryHead: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },

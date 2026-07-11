@@ -22,6 +22,9 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, estimateVideoSize, getRealFileSize } from '@/context/CleanerContext';
+import { SCAN_CAP_TOOL, POOL_CONCURRENCY } from '@/constants/limits';
+import { logError } from '@/utils/logger';
+import { runWithPool } from '@/utils/pool';
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, getAgeText } from '@/utils/format';
@@ -204,7 +207,7 @@ export default function LargeFilesScreen() {
       }
       photoCursor = page.hasNextPage ? page.endCursor : undefined;
       setScanProgress(Math.min(35, 10 + Math.floor(allFiles.length / 20)));
-    } while (photoCursor && allFiles.length < 5000);
+    } while (photoCursor && allFiles.length < SCAN_CAP_TOOL);
 
     setScanStatus('LOADING VIDEO LIBRARY...');
     setScanProgress(40);
@@ -234,7 +237,7 @@ export default function LargeFilesScreen() {
       }
       videoCursor = page.hasNextPage ? page.endCursor : undefined;
       setScanProgress(Math.min(65, 40 + Math.floor(videoCount / 10)));
-    } while (videoCursor && allFiles.length < 10000);
+    } while (videoCursor && allFiles.length < SCAN_CAP_TOOL);
 
     // Sort by size descending
     allFiles.sort((a, b) => b.size - a.size);
@@ -244,12 +247,11 @@ export default function LargeFilesScreen() {
     // ── Phase 2: real sizes for top 30 ──────────────────────────────────────
     setScanStatus('MEASURING FILE SIZES...');
     const top30 = top200.slice(0, 30);
-    const realSizes = await Promise.all(
-      top30.map(f => getRealFileSize(f.uri))
-    );
+    const realSizes = await runWithPool(top30, f => getRealFileSize(f.uri), POOL_CONCURRENCY);
     top30.forEach((f, i) => {
-      if (realSizes[i] !== null && realSizes[i]! > 0) {
-        f.size = realSizes[i]!;
+      const sz = realSizes[i];
+      if (sz !== null && sz !== undefined && sz > 0) {
+        f.size = sz;
         f.sizeIsReal = true;
         // Recompute recommendation with real size
         f.recommendation = getRecommendation(f.type, f.ageDays, f.size);
@@ -337,7 +339,9 @@ export default function LargeFilesScreen() {
         await MediaLibrary.deleteAssetsAsync(ids);
         bytesActuallyFreed = selectedSize;
         itemsRemoved = selected.length;
-      } catch {}
+      } catch (err) {
+        logError('large-files/delete', err);
+      }
     }
 
     await sleep(800);

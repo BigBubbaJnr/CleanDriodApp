@@ -12,6 +12,8 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
+import { SCAN_CAP_TOOL } from '@/constants/limits';
+import { logError } from '@/utils/logger';
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, formatDateShort } from '@/utils/format';
@@ -125,7 +127,7 @@ export default function ScreenshotManagerScreen() {
       });
       allAssets = [...allAssets, ...page.assets];
       cursor = page.hasNextPage ? page.endCursor : undefined;
-    } while (cursor && allAssets.length < 5000);
+    } while (cursor && allAssets.length < SCAN_CAP_TOOL);
     const assets = { assets: allAssets };
 
     const items: ScreenshotItem[] = assets.assets.map(a => ({
@@ -176,7 +178,9 @@ export default function ScreenshotManagerScreen() {
     if (Platform.OS !== 'web') {
       try {
         await MediaLibrary.deleteAssetsAsync(selected.map(s => s.assetId));
-      } catch {}
+      } catch (err) {
+        logError('screenshots/delete', err);
+      }
     }
 
     await sleep(600);
