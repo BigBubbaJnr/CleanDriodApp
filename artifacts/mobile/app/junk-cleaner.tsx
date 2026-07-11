@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -11,6 +11,10 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, estimateVideoSize } from '@/context/CleanerContext';
+import { useBevel } from '@/hooks/useBevel';
+import { formatBytes } from '@/utils/format';
+import SegBar from '@/components/SegBar';
+import TerminalLog from '@/components/TerminalLog';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as FileSystem from 'expo-file-system/legacy';
@@ -43,46 +47,6 @@ const CAT_ICONS: Record<JunkCategory, keyof typeof Feather.glyphMap> = {
   large_video: 'film',
 };
 
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
-}
-
-function SegBar({ value, color, total = 24 }: { value: number; color: string; total?: number }) {
-  const colors = useColors();
-  const filled = Math.max(0, Math.min(total, Math.round(value * total)));
-  return (
-    <View style={{ flexDirection: 'row', gap: 2 }}>
-      {Array.from({ length: total }, (_, i) => (
-        <View key={i} style={{ flex: 1, height: 8, backgroundColor: i < filled ? color : colors.border }} />
-      ))}
-    </View>
-  );
-}
-
-/** Live terminal log box */
-function TerminalLog({ lines }: { lines: string[] }) {
-  const colors = useColors();
-  const scrollRef = useRef<ScrollView>(null);
-  useEffect(() => {
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
-  }, [lines.length]);
-  return (
-    <ScrollView
-      ref={scrollRef}
-      style={[styles.termBox, { backgroundColor: colors.muted, borderColor: colors.border }]}
-      contentContainerStyle={{ padding: 10, gap: 3 }}
-      showsVerticalScrollIndicator={false}
-    >
-      {lines.map((line, i) => (
-        <Text key={i} style={[styles.termLine, { color: colors.mutedForeground }]}>
-          {line}
-        </Text>
-      ))}
-    </ScrollView>
-  );
-}
 
 export default function JunkCleanerScreen() {
   const colors = useColors();
@@ -317,11 +281,7 @@ export default function JunkCleanerScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  const bevelRaised = {
-    borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
-    borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
-    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-  };
+  const bevel = useBevel();
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -331,7 +291,7 @@ export default function JunkCleanerScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevelRaised, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -355,7 +315,7 @@ export default function JunkCleanerScreen() {
         {/* ── IDLE ── */}
         {phase === 'idle' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.idleIconBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.idleIconBox, bevel, { backgroundColor: colors.card }]}>
               <Feather name="trash-2" size={44} color={colors.primary} />
             </View>
             <Text style={[styles.idleTitle, { color: colors.foreground }]}>JUNK CLEANER</Text>
@@ -383,7 +343,7 @@ export default function JunkCleanerScreen() {
         {/* ── SCANNING ── */}
         {phase === 'scanning' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.scanBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.scanBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.scanTitle, { color: colors.primary }]}>{'[SCANNING...]'}</Text>
               <Text style={[styles.scanPct, { color: colors.primary }]}>
                 {String(scanProgress).padStart(3, '0')}%
@@ -398,7 +358,7 @@ export default function JunkCleanerScreen() {
         {(phase === 'results' || phase === 'cleaning') && (
           <Animated.View entering={FadeIn}>
             {/* Summary */}
-            <View style={[styles.summaryPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.summaryPanel, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.summaryHead, { color: colors.primary }]}>{'[SCAN COMPLETE]'}</Text>
               <View style={styles.summaryRow}>
                 <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>ITEMS_FOUND</Text>
@@ -413,14 +373,14 @@ export default function JunkCleanerScreen() {
             </View>
 
             {items.length === 0 ? (
-              <View style={[styles.emptyPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
                 <Text style={[styles.emptyText, { color: colors.success }]}>{'[OK] DEVICE IS CLEAN'}</Text>
                 <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
                   No junk found within accessible storage areas
                 </Text>
               </View>
             ) : (
-              <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.listPanel, bevel, { backgroundColor: colors.card }]}>
                 {items.map((item, idx) => (
                   <Pressable
                     key={item.id}
@@ -470,7 +430,7 @@ export default function JunkCleanerScreen() {
         {/* ── DONE ── */}
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.doneBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] CLEAN COMPLETE'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>~{formatBytes(bytesFreed)}</Text>
               <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED FROM DEVICE</Text>
@@ -559,8 +519,6 @@ const styles = StyleSheet.create({
   scanTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
   scanPct: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
 
-  termBox: { width: '100%', maxHeight: 160, borderWidth: 1 },
-  termLine: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
 
   summaryPanel: { padding: 14, gap: 6 },
   summaryHead: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },

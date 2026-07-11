@@ -25,37 +25,16 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, getRealFileSize } from '@/context/CleanerContext';
+import { useBevel } from '@/hooks/useBevel';
+import { formatBytes, getAgeText, formatDateShort } from '@/utils/format';
+import SegBar from '@/components/SegBar';
+import TerminalLog from '@/components/TerminalLog';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import * as FileSystem from 'expo-file-system/legacy';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
-}
-
-function getAgeText(creationTimeSecs: number): string {
-  const days = Math.floor((Date.now() - creationTimeSecs * 1000) / 86_400_000);
-  if (days < 1) return 'TODAY';
-  if (days === 1) return 'YESTERDAY';
-  if (days < 7) return `${days}D AGO`;
-  if (days < 30) return `${Math.floor(days / 7)}W AGO`;
-  if (days < 365) return `${Math.floor(days / 30)}MO AGO`;
-  const y = Math.floor(days / 365);
-  const m = Math.floor((days % 365) / 30);
-  return m > 0 ? `${y}Y ${m}MO AGO` : `${y}Y AGO`;
-}
-
-function shortDate(creationTimeSecs: number): string {
-  const d = new Date(creationTimeSecs * 1000);
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric', year: '2-digit' }).toUpperCase();
-}
 
 /**
  * Strip extension and common copy suffixes so duplicates share the same key.
@@ -105,19 +84,6 @@ interface DuplicateGroup {
   wasted: number;
 }
 
-// ── Sub-components ───────────────────────────────────────────────────────────
-
-function SegBar({ value, color, total = 24 }: { value: number; color: string; total?: number }) {
-  const colors = useColors();
-  const filled = Math.max(0, Math.min(total, Math.round(value * total)));
-  return (
-    <View style={{ flexDirection: 'row', gap: 2 }}>
-      {Array.from({ length: total }, (_, i) => (
-        <View key={i} style={{ flex: 1, height: 8, backgroundColor: i < filled ? color : colors.border }} />
-      ))}
-    </View>
-  );
-}
 
 // ── Screen ───────────────────────────────────────────────────────────────────
 
@@ -135,6 +101,7 @@ export default function DuplicateFinderScreen() {
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
   const accentGreen = colors.success;
+  const bevel = useBevel();
 
   const addLog = useCallback((msg: string) => setScanLog(prev => [...prev, `> ${msg}`]), []);
 
@@ -360,12 +327,6 @@ export default function DuplicateFinderScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  const bevelRaised = {
-    borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
-    borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
-    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-  };
-
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* ── Header ── */}
@@ -374,7 +335,7 @@ export default function DuplicateFinderScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevelRaised, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -391,7 +352,7 @@ export default function DuplicateFinderScreen() {
         {/* ── IDLE ── */}
         {phase === 'idle' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.idleIconBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.idleIconBox, bevel, { backgroundColor: colors.card }]}>
               <Feather name="copy" size={44} color={accentGreen} />
             </View>
             <Text style={[styles.idleTitle, { color: colors.foreground }]}>DUPLICATE FINDER</Text>
@@ -427,23 +388,14 @@ export default function DuplicateFinderScreen() {
         {/* ── SCANNING ── */}
         {phase === 'scanning' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.scanBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.scanBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.scanTitle, { color: accentGreen }]}>{'[SCANNING...]'}</Text>
               <Text style={[styles.scanPct, { color: accentGreen }]}>
                 {String(scanProgress).padStart(3, '0')}%
               </Text>
               <SegBar value={scanProgress / 100} color={accentGreen} />
             </View>
-            {/* Live log */}
-            <ScrollView
-              style={[styles.logBox, { backgroundColor: colors.muted, borderColor: colors.border }]}
-              contentContainerStyle={{ padding: 10, gap: 3 }}
-              showsVerticalScrollIndicator={false}
-            >
-              {scanLog.map((l, i) => (
-                <Text key={i} style={[styles.logLine, { color: colors.mutedForeground }]}>{l}</Text>
-              ))}
-            </ScrollView>
+            <TerminalLog lines={scanLog} />
           </Animated.View>
         )}
 
@@ -451,7 +403,7 @@ export default function DuplicateFinderScreen() {
         {(phase === 'results' || phase === 'cleaning') && (
           <Animated.View entering={FadeIn} style={{ gap: 10 }}>
             {/* Summary */}
-            <View style={[styles.summaryPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.summaryPanel, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.summaryHead, { color: accentGreen }]}>{'[SCAN COMPLETE]'}</Text>
               <View style={styles.summaryRow}>
                 <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>GROUPS_FOUND</Text>
@@ -471,7 +423,7 @@ export default function DuplicateFinderScreen() {
             </View>
 
             {groups.length === 0 ? (
-              <View style={[styles.emptyPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
                 <Text style={[styles.emptyText, { color: accentGreen }]}>{'[OK] NO DUPLICATES FOUND'}</Text>
                 <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
                   No duplicate filenames or same-day/same-resolution groups detected
@@ -481,7 +433,7 @@ export default function DuplicateFinderScreen() {
               groups.map(group => {
                 const keepColor = accentGreen;
                 return (
-                  <View key={group.id} style={[styles.groupPanel, bevelRaised, { backgroundColor: colors.card }]}>
+                  <View key={group.id} style={[styles.groupPanel, bevel, { backgroundColor: colors.card }]}>
                     {/* Group header */}
                     <View style={[styles.groupHeader, { borderBottomColor: colors.border }]}>
                       <View style={[styles.matchBadge, {
@@ -540,7 +492,7 @@ export default function DuplicateFinderScreen() {
                               </View>
                             )}
                             <Text style={[styles.copyDate, { color: colors.mutedForeground }]}>
-                              {shortDate(group.creationTimes[idx])}
+                              {formatDateShort(group.creationTimes[idx])}
                             </Text>
                             <Text style={[styles.copyLabel, {
                               color: isKeep ? keepColor : isSelected ? colors.destructive : colors.mutedForeground,
@@ -562,12 +514,7 @@ export default function DuplicateFinderScreen() {
                 <Text style={[styles.logLabel, { color: colors.mutedForeground }]}>
                   {'── SCAN LOG ──────────────────────'}
                 </Text>
-                <ScrollView style={[styles.logBox, { backgroundColor: colors.muted, borderColor: colors.border }]}
-                  contentContainerStyle={{ padding: 10, gap: 3 }} showsVerticalScrollIndicator={false}>
-                  {scanLog.map((l, i) => (
-                    <Text key={i} style={[styles.logLine, { color: colors.mutedForeground }]}>{l}</Text>
-                  ))}
-                </ScrollView>
+                <TerminalLog lines={scanLog} />
               </View>
             )}
           </Animated.View>
@@ -576,7 +523,7 @@ export default function DuplicateFinderScreen() {
         {/* ── DONE ── */}
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.doneBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.doneHead, { color: accentGreen }]}>{'[OK] DUPES REMOVED'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(bytesFreed)}</Text>
               <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED FROM DUPLICATES</Text>
@@ -657,8 +604,6 @@ const styles = StyleSheet.create({
   scanTitle: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
   scanPct: { fontSize: 48, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
 
-  logBox: { width: '100%', maxHeight: 140, borderWidth: 1 },
-  logLine: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
   logLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 5 },
 
   summaryPanel: { padding: 14, gap: 6 },

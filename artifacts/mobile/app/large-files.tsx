@@ -8,7 +8,7 @@
  *
  * Per-file info shown: name, size (real/est), type, age, recommendation.
  */
-import React, { useCallback, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Platform,
@@ -21,51 +21,36 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, estimateVideoSize, getRealFileSize } from '@/context/CleanerContext';
+import { useBevel } from '@/hooks/useBevel';
+import { formatBytes, getAgeText } from '@/utils/format';
+import SegBar from '@/components/SegBar';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// ── Helpers ─────────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
-}
-
-function getAgeText(creationTimeSecs: number): string {
-  const days = Math.floor((Date.now() - creationTimeSecs * 1000) / 86_400_000);
-  if (days < 1) return 'TODAY';
-  if (days === 1) return 'YESTERDAY';
-  if (days < 7) return `${days}D AGO`;
-  if (days < 30) return `${Math.floor(days / 7)}W AGO`;
-  if (days < 365) return `${Math.floor(days / 30)}MO AGO`;
-  const y = Math.floor(days / 365);
-  const m = Math.floor((days % 365) / 30);
-  return m > 0 ? `${y}Y ${m}MO AGO` : `${y}Y AGO`;
-}
+// ── Recommendation engine ────────────────────────────────────────────────────
 
 function getRecommendation(type: LargeFileType, ageDays: number, sizeBytes: number): string {
-  const mb = sizeBytes / (1024 * 1024);
+  const mb = Math.round(sizeBytes / (1024 * 1024));
   if (type === 'video') {
-    if (ageDays > 365) return 'Old video — likely safe to remove';
-    if (ageDays > 180) return 'Over 6 months old — review for archiving';
-    if (ageDays > 90) return 'Over 3 months old — consider reviewing';
-    if (mb > 1024) return 'Very large — back up to cloud first';
-    return 'Recent video — keep if needed';
+    if (ageDays > 365) return `${mb} MB — over a year old; almost certainly safe to remove or archive to cloud`;
+    if (ageDays > 180) return `${mb} MB — 6+ months old; back up to cloud then delete to reclaim this space`;
+    if (ageDays > 90) return `${mb} MB — 3+ months old; review whether you still need it`;
+    if (mb > 1024) return `Over 1 GB — back up to Google Photos or Drive before deleting`;
+    return `Recent video — keep if you still need it`;
   }
   if (type === 'image') {
-    if (ageDays > 365) return 'Old photo — consider cloud archiving';
-    if (mb > 15) return 'High-resolution / RAW image';
-    return 'Large photo';
+    if (ageDays > 365) return `${mb} MB photo from over a year ago — consider archiving to cloud`;
+    if (mb > 30) return `${mb} MB — likely uncompressed or RAW; back up before deleting`;
+    return `${mb} MB large photo`;
   }
   if (type === 'audio') {
-    if (ageDays > 180) return 'Old recording — review if still needed';
-    return 'Large audio file';
+    if (ageDays > 180) return `${mb} MB recording, 6+ months old — review if still needed`;
+    return `${mb} MB audio file`;
   }
-  return 'Large file — review if still needed';
+  return `${mb} MB — review if still needed`;
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -103,18 +88,6 @@ const FILTERS: { key: FilterType; label: string }[] = [
   { key: 'audio', label: 'AUDIO' },
 ];
 
-function SegBar({ value, color, total = 24 }: { value: number; color: string; total?: number }) {
-  const colors = useColors();
-  const filled = Math.max(0, Math.min(total, Math.round(value * total)));
-  return (
-    <View style={{ flexDirection: 'row', gap: 2 }}>
-      {Array.from({ length: total }, (_, i) => (
-        <View key={i} style={{ flex: 1, height: 8, backgroundColor: i < filled ? color : colors.border }} />
-      ))}
-    </View>
-  );
-}
-
 // ── Screen ───────────────────────────────────────────────────────────────────
 
 export default function LargeFilesScreen() {
@@ -132,6 +105,7 @@ export default function LargeFilesScreen() {
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
   const accentAmber = colors.warning;
+  const bevel = useBevel();
 
   const startScan = useCallback(async () => {
     setPhase('scanning');
@@ -286,12 +260,6 @@ export default function LargeFilesScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  const bevelRaised = {
-    borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
-    borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
-    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-  };
-
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       {/* ── Header ── */}
@@ -300,7 +268,7 @@ export default function LargeFilesScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevelRaised, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -328,7 +296,7 @@ export default function LargeFilesScreen() {
                           borderBottomColor: colors.bevelLight, borderRightColor: colors.bevelLight,
                           borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
                         }
-                      : { backgroundColor: colors.card, ...bevelRaised },
+                      : { backgroundColor: colors.card, ...bevel },
                   ]}
                   onPress={() => { setFilter(f.key); Haptics.selectionAsync(); }}
                 >
@@ -349,7 +317,7 @@ export default function LargeFilesScreen() {
         {/* ── IDLE ── */}
         {phase === 'idle' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.idleIconBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.idleIconBox, bevel, { backgroundColor: colors.card }]}>
               <Feather name="hard-drive" size={44} color={accentAmber} />
             </View>
             <Text style={[styles.idleTitle, { color: colors.foreground }]}>LARGE FILE SCANNER</Text>
@@ -385,7 +353,7 @@ export default function LargeFilesScreen() {
         {/* ── SCANNING ── */}
         {phase === 'scanning' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.scanBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.scanBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.scanTitle, { color: accentAmber }]}>{'[SCANNING...]'}</Text>
               <Text style={[styles.scanPct, { color: accentAmber }]}>
                 {String(scanProgress).padStart(3, '0')}%
@@ -400,7 +368,7 @@ export default function LargeFilesScreen() {
         {(phase === 'results' || phase === 'cleaning') && (
           <Animated.View entering={FadeIn} style={{ gap: 8 }}>
             {/* Count bar */}
-            <View style={[styles.countPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.countPanel, bevel, { backgroundColor: colors.card }]}>
               <View style={styles.countRow}>
                 <Text style={[styles.countKey, { color: colors.mutedForeground }]}>FILES</Text>
                 <Text style={[styles.countSep]}>{' = '}</Text>
@@ -418,7 +386,7 @@ export default function LargeFilesScreen() {
 
             {/* Empty state */}
             {filtered.length === 0 && (
-              <View style={[styles.emptyPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
                 <Text style={[styles.emptyText, { color: colors.success }]}>
                   {filter === 'all' ? '[OK] NO LARGE FILES FOUND' : `[OK] NO ${filter.toUpperCase()} FILES`}
                 </Text>
@@ -433,7 +401,7 @@ export default function LargeFilesScreen() {
 
             {/* File list */}
             {filtered.length > 0 && (
-              <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.listPanel, bevel, { backgroundColor: colors.card }]}>
                 {filtered.map((file, idx) => (
                   <Pressable
                     key={file.id}
@@ -487,7 +455,7 @@ export default function LargeFilesScreen() {
         {/* ── DONE ── */}
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.doneBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] FILES REMOVED'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(bytesFreed)}</Text>
               <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED UP</Text>

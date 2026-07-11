@@ -11,6 +11,8 @@ import React, { useMemo } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, CleanHistoryItem } from '@/context/CleanerContext';
+import { useBevel } from '@/hooks/useBevel';
+import { formatBytes, formatAbsoluteDate } from '@/utils/format';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -22,17 +24,6 @@ const FREQUENCIES: { value: Frequency; label: string; desc: string }[] = [
   { value: 'weekly', label: 'WEEKLY', desc: 'Every Sunday at 02:00' },
   { value: 'monthly', label: 'MONTHLY', desc: 'First of month at 02:00' },
 ];
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
-}
-
-function formatDate(dateStr: string): string {
-  const d = new Date(dateStr);
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).toUpperCase();
-}
 
 function getNextRun(frequency: Frequency): string {
   const now = new Date();
@@ -101,11 +92,7 @@ export default function ScheduleScreen() {
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
-  const bevelRaised = {
-    borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
-    borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
-    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-  };
+  const bevel = useBevel();
 
   const breakdown = useMemo(() => computeTypeBreakdown(history), [history]);
   const trend = useMemo(() => computeWeeklyTrend(history), [history]);
@@ -127,7 +114,7 @@ export default function ScheduleScreen() {
       <Text style={[styles.sub, { color: colors.mutedForeground }]}>SET IT AND FORGET IT</Text>
 
       {/* Toggle */}
-      <View style={[styles.panel, bevelRaised, { backgroundColor: colors.card }]}>
+      <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
         <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
           <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[DAEMON STATUS]'}</Text>
         </View>
@@ -158,7 +145,7 @@ export default function ScheduleScreen() {
           <Text style={[styles.sectionLabel, { color: colors.primary }]}>
             {'── INTERVAL ─────────────────────────'}
           </Text>
-          <View style={[styles.panel, bevelRaised, { backgroundColor: colors.card }]}>
+          <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
             {FREQUENCIES.map((f, idx) => {
               const active = scheduleSettings.frequency === f.value;
               return (
@@ -199,7 +186,7 @@ export default function ScheduleScreen() {
           </Text>
 
           {/* All-time total */}
-          <View style={[styles.totalPanel, bevelRaised, { backgroundColor: colors.card }]}>
+          <View style={[styles.totalPanel, bevel, { backgroundColor: colors.card }]}>
             <Text style={[styles.totalLabel, { color: colors.mutedForeground }]}>TOTAL FREED (ALL TIME)</Text>
             <Text style={[styles.totalValue, { color: colors.primary }]}>{formatBytes(totalBytesFreed)}</Text>
             <Text style={[styles.totalSub, { color: colors.mutedForeground }]}>
@@ -209,7 +196,7 @@ export default function ScheduleScreen() {
 
           {/* Weekly trend */}
           {(trend.thisWeek > 0 || trend.lastWeek > 0) && (
-            <View style={[styles.trendPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.trendPanel, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.panelHead, { color: colors.primary }]}>{'[WEEKLY TREND]'}</Text>
               <View style={styles.trendRow}>
                 <View style={styles.trendCol}>
@@ -241,7 +228,7 @@ export default function ScheduleScreen() {
 
           {/* Breakdown by type */}
           {breakdown.length > 0 && (
-            <View style={[styles.panel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
               <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
                 <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[BY CATEGORY]'}</Text>
               </View>
@@ -289,7 +276,7 @@ export default function ScheduleScreen() {
           <Text style={[styles.sectionLabel, { color: colors.primary, marginTop: 8 }]}>
             {'── EXECUTION LOG ────────────────────'}
           </Text>
-          <View style={[styles.panel, bevelRaised, { backgroundColor: colors.card }]}>
+          <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
             {history.map((item, idx) => (
               <View
                 key={item.id}
@@ -300,7 +287,7 @@ export default function ScheduleScreen() {
                   <Text style={[styles.histLabel, { color: colors.foreground }]} numberOfLines={1}>
                     {item.label.toUpperCase()}
                   </Text>
-                  <Text style={[styles.histDate, { color: colors.mutedForeground }]}>{formatDate(item.date)}</Text>
+                  <Text style={[styles.histDate, { color: colors.mutedForeground }]}>{formatAbsoluteDate(item.date)}</Text>
                 </View>
                 <Text style={[styles.histSize, { color: colors.accent }]}>+{formatBytes(item.bytesFreed)}</Text>
               </View>
@@ -308,7 +295,7 @@ export default function ScheduleScreen() {
           </View>
         </>
       ) : (
-        <View style={[styles.emptyBox, bevelRaised, { backgroundColor: colors.card, marginTop: 20 }]}>
+        <View style={[styles.emptyBox, bevel, { backgroundColor: colors.card, marginTop: 20 }]}>
           <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ LOG EMPTY ]'}</Text>
           <Text style={[styles.emptyText, { color: colors.mutedForeground }]}>
             History and trends appear here after your first cleaning operation

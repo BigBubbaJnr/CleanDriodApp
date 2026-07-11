@@ -5,9 +5,8 @@
  * On re-scan, compares with the most recent previous snapshot and shows
  * delta values: used space Δ, category Δ.
  */
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useState } from 'react';
 import {
-  ActivityIndicator,
   Platform,
   Pressable,
   ScrollView,
@@ -18,85 +17,46 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, MediaBreakdown, ScanSnapshot } from '@/context/CleanerContext';
+import { useBevel } from '@/hooks/useBevel';
+import { formatBytes, formatDelta, formatAbsoluteDate, daysAgoLabel } from '@/utils/format';
+import SegBar from '@/components/SegBar';
+import TerminalLog from '@/components/TerminalLog';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// ── Helpers ──────────────────────────────────────────────────────────────────
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
-}
-
-function formatDelta(delta: number): string {
-  const sign = delta >= 0 ? '+' : '-';
-  return `${sign}${formatBytes(Math.abs(delta))}`;
-}
-
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }).toUpperCase();
-}
-
-function daysAgo(iso: string): string {
-  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
-  if (d === 0) return 'TODAY';
-  if (d === 1) return 'YESTERDAY';
-  if (d < 7) return `${d} DAYS AGO`;
-  if (d < 30) return `${Math.floor(d / 7)} WEEKS AGO`;
-  return `${Math.floor(d / 30)} MONTHS AGO`;
-}
+// ── Recommendation engine ────────────────────────────────────────────────────
 
 function getRecommendation(bd: MediaBreakdown): string[] {
   const recos: string[] = [];
   const totalMediaSize = bd.images.size + bd.videos.size + bd.audio.size + bd.screenshots.size;
   if (totalMediaSize > 0) {
     const videoPct = bd.videos.size / totalMediaSize;
-    if (videoPct > 0.5) recos.push(`Videos are ${Math.round(videoPct * 100)}% of media — review old recordings`);
+    if (videoPct > 0.5)
+      recos.push(
+        `Videos are ${Math.round(videoPct * 100)}% of media (~${formatBytes(bd.videos.size)}) — ` +
+        `they compress poorly and grow fast; use Large File Scanner to find old recordings`,
+      );
     const ssPct = bd.screenshots.size / totalMediaSize;
-    if (ssPct > 0.1) recos.push(`${bd.screenshots.count} screenshots taking ~${formatBytes(bd.screenshots.size)} — use Screenshot Manager`);
-    if (bd.downloads.count > 50) recos.push(`${bd.downloads.count} items in Downloads — Junk Cleaner can clear large ones`);
+    if (ssPct > 0.1)
+      recos.push(
+        `${bd.screenshots.count} screenshots taking ~${formatBytes(bd.screenshots.size)} — ` +
+        `they accumulate silently; Screenshot Manager clears them in one step`,
+      );
+    if (bd.downloads.count > 50)
+      recos.push(
+        `${bd.downloads.count} items in Downloads — large downloads are common forgotten junk; ` +
+        `Junk Cleaner auto-filters files over 30 MB`,
+      );
   }
-  if (bd.appCache.size > 50 * 1024 * 1024) recos.push(`App cache is ${formatBytes(bd.appCache.size)} — Cache Cleaner can clear it`);
-  if (recos.length === 0) recos.push('Storage looks healthy — no immediate action needed');
+  if (bd.appCache.size > 50 * 1024 * 1024)
+    recos.push(
+      `App cache is ${formatBytes(bd.appCache.size)} — caches rebuild automatically so clearing is always safe`,
+    );
+  if (recos.length === 0)
+    recos.push('Storage looks healthy — no action needed right now');
   return recos;
-}
-
-// ── Sub-components ───────────────────────────────────────────────────────────
-
-function SegBar({ value, color, total = 20 }: { value: number; color: string; total?: number }) {
-  const colors = useColors();
-  const filled = Math.max(0, Math.min(total, Math.round(value * total)));
-  return (
-    <View style={{ flexDirection: 'row', gap: 2 }}>
-      {Array.from({ length: total }, (_, i) => (
-        <View key={i} style={{ flex: 1, height: 6, backgroundColor: i < filled ? color : colors.border }} />
-      ))}
-    </View>
-  );
-}
-
-function TerminalLog({ lines }: { lines: string[] }) {
-  const colors = useColors();
-  const scrollRef = useRef<ScrollView>(null);
-  useEffect(() => {
-    setTimeout(() => scrollRef.current?.scrollToEnd({ animated: true }), 50);
-  }, [lines.length]);
-  return (
-    <ScrollView
-      ref={scrollRef}
-      style={[styles.termBox, { backgroundColor: colors.muted, borderColor: colors.border }]}
-      contentContainerStyle={{ padding: 10, gap: 3 }}
-      showsVerticalScrollIndicator={false}
-    >
-      {lines.map((line, i) => (
-        <Text key={i} style={[styles.termLine, { color: colors.mutedForeground }]}>{line}</Text>
-      ))}
-    </ScrollView>
-  );
 }
 
 // ── Screen ───────────────────────────────────────────────────────────────────
@@ -161,11 +121,7 @@ export default function StorageIntelScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [scanMediaLibrary, addLog, addScanSnapshot, storageStats]);
 
-  const bevelRaised = {
-    borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
-    borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
-    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-  };
+  const bevel = useBevel();
 
   // Previous snapshot (second in array, since new one was just added)
   const prevSnap: ScanSnapshot | null = snapshots.length >= 2 ? snapshots[1] : null;
@@ -224,7 +180,7 @@ export default function StorageIntelScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevelRaised, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -240,7 +196,7 @@ export default function StorageIntelScreen() {
       >
         {/* ── Disk stats ── */}
         {storageStats && (
-          <Animated.View entering={FadeIn} style={[styles.diskPanel, bevelRaised, { backgroundColor: colors.card }]}>
+          <Animated.View entering={FadeIn} style={[styles.diskPanel, bevel, { backgroundColor: colors.card }]}>
             <Text style={[styles.panelHead, { color: colors.primary }]}>{'[DISK STATUS]'}</Text>
             {[
               { key: 'TOTAL', val: formatBytes(total), color: colors.foreground, delta: null },
@@ -285,7 +241,7 @@ export default function StorageIntelScreen() {
                 </View>
                 {prevSnap && (
                   <Text style={[styles.legendText, { color: colors.mutedForeground }]}>
-                    vs {daysAgo(prevSnap.timestamp)}
+                    vs {daysAgoLabel(prevSnap.timestamp)}
                   </Text>
                 )}
               </View>
@@ -312,7 +268,7 @@ export default function StorageIntelScreen() {
 
         {/* ── Scanning ── */}
         {scanning && (
-          <Animated.View entering={FadeIn} style={[styles.scanPanel, bevelRaised, { backgroundColor: colors.card }]}>
+          <Animated.View entering={FadeIn} style={[styles.scanPanel, bevel, { backgroundColor: colors.card }]}>
             <Text style={[styles.scanTitle, { color: colors.primary }]}>{'[ANALYSING...]'}</Text>
             <Text style={[styles.scanPct, { color: colors.primary }]}>
               {String(progress).padStart(3, '0')}%
@@ -328,14 +284,14 @@ export default function StorageIntelScreen() {
             {/* Last scanned */}
             {mediaBreakdown.lastScanned && (
               <Text style={[styles.lastScanned, { color: colors.mutedForeground }]}>
-                {'> LAST SCANNED: '}{formatDate(mediaBreakdown.lastScanned)}
+                {'> LAST SCANNED: '}{formatAbsoluteDate(mediaBreakdown.lastScanned)}
                 {'  ·  '}{mediaBreakdown.totalScanned} ITEMS
-                {prevSnap && `  ·  PREV: ${daysAgo(prevSnap.timestamp)}`}
+                {prevSnap && `  ·  PREV: ${daysAgoLabel(prevSnap.timestamp)}`}
               </Text>
             )}
 
             {/* Recommendations */}
-            <View style={[styles.recoPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.recoPanel, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.panelHead, { color: colors.primary }]}>{'[RECOMMENDATIONS]'}</Text>
               {recommendations.map((r, i) => (
                 <Text key={i} style={[styles.recoLine, { color: colors.mutedForeground }]}>
@@ -345,7 +301,7 @@ export default function StorageIntelScreen() {
             </View>
 
             {/* Category list */}
-            <View style={[styles.catPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.catPanel, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.panelHead, { color: colors.primary }]}>
                 {'[MEDIA BREAKDOWN]'}
                 <Text style={[styles.estNote, { color: colors.mutedForeground }]}>{' · sizes estimated'}</Text>
@@ -421,7 +377,7 @@ export default function StorageIntelScreen() {
                 <Text style={[styles.lastScanned, { color: colors.mutedForeground }]}>
                   {'── SCAN HISTORY ──────────────────────'}
                 </Text>
-                <View style={[styles.snapPanel, bevelRaised, { backgroundColor: colors.card }]}>
+                <View style={[styles.snapPanel, bevel, { backgroundColor: colors.card }]}>
                   {snapshots.slice(0, 5).map((snap, idx) => (
                     <View
                       key={snap.id}
@@ -431,7 +387,7 @@ export default function StorageIntelScreen() {
                       ]}
                     >
                       <Text style={[styles.snapDate, { color: colors.mutedForeground }]}>
-                        {formatDate(snap.timestamp)}
+                        {formatAbsoluteDate(snap.timestamp)}
                       </Text>
                       <Text style={[styles.snapUsed, { color: colors.accent }]}>
                         {formatBytes(snap.usedSpace)} used
@@ -446,7 +402,7 @@ export default function StorageIntelScreen() {
 
         {/* ── Empty state ── */}
         {!mediaBreakdown && !scanning && (
-          <View style={[styles.emptyPanel, bevelRaised, { backgroundColor: colors.card }]}>
+          <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
             <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ _ ]'}</Text>
             <Text style={[styles.emptyTitle, { color: colors.foreground }]}>NO ANALYSIS YET</Text>
             <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
@@ -493,8 +449,6 @@ const styles = StyleSheet.create({
   scanPanel: { padding: 16, gap: 14 },
   scanTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
   scanPct: { fontSize: 40, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
-  termBox: { maxHeight: 140, borderWidth: 1 },
-  termLine: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3 },
 
   lastScanned: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1 },
 

@@ -12,22 +12,13 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
+import { useBevel } from '@/hooks/useBevel';
+import { formatBytes, formatDateShort } from '@/utils/format';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as MediaLibrary from 'expo-media-library';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
-}
-
-function formatDate(ts: number): string {
-  const d = new Date(ts * 1000);
-  return d.toLocaleDateString([], { year: 'numeric', month: 'short', day: 'numeric' }).toUpperCase();
-}
 
 interface ScreenshotItem {
   id: string;
@@ -162,7 +153,7 @@ export default function ScreenshotManagerScreen() {
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   };
 
-  const bevelRaised = {
+  const bevel = {
     borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
     borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
@@ -171,7 +162,7 @@ export default function ScreenshotManagerScreen() {
   // Group screenshots by date
   const grouped: { date: string; items: ScreenshotItem[] }[] = [];
   for (const ss of screenshots) {
-    const dateKey = formatDate(ss.creationTime);
+    const dateKey = formatDateShort(ss.creationTime);
     const existing = grouped.find(g => g.date === dateKey);
     if (existing) existing.items.push(ss);
     else grouped.push({ date: dateKey, items: [ss] });
@@ -185,7 +176,7 @@ export default function ScreenshotManagerScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevelRaised, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -209,7 +200,7 @@ export default function ScreenshotManagerScreen() {
         {/* ── LOADING ── */}
         {phase === 'loading' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.loadBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.loadBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.loadTitle, { color: colors.success }]}>{'[LOADING...]'}</Text>
               <ActivityIndicator color={colors.success} />
               <Text style={[styles.loadStatus, { color: colors.mutedForeground }]}>{'> '}{loadStatus}</Text>
@@ -222,7 +213,7 @@ export default function ScreenshotManagerScreen() {
           <Animated.View entering={FadeIn} style={{ gap: 12 }}>
             {/* Summary */}
             {screenshots.length > 0 && (
-              <View style={[styles.summaryPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.summaryPanel, bevel, { backgroundColor: colors.card }]}>
                 <Text style={[styles.summaryHead, { color: colors.success }]}>{'[SCREENSHOTS]'}</Text>
                 <View style={styles.summaryRow}>
                   <Text style={[styles.summaryKey, { color: colors.mutedForeground }]}>TOTAL_COUNT</Text>
@@ -239,7 +230,7 @@ export default function ScreenshotManagerScreen() {
 
             {/* Empty */}
             {screenshots.length === 0 && (
-              <View style={[styles.emptyPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.emptyPanel, bevel, { backgroundColor: colors.card }]}>
                 <Text style={[styles.emptyIcon, { color: colors.mutedForeground }]}>{'[ _ ]'}</Text>
                 <Text style={[styles.emptyTitle, { color: colors.foreground }]}>NO SCREENSHOTS</Text>
                 <Text style={[styles.emptyDesc, { color: colors.mutedForeground }]}>
@@ -296,7 +287,7 @@ export default function ScreenshotManagerScreen() {
         {/* ── DONE ── */}
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.doneBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] DELETED'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>~{formatBytes(freedBytes)}</Text>
               <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED FROM SCREENSHOTS</Text>

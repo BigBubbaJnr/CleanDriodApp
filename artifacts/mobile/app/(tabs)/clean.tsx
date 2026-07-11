@@ -2,18 +2,15 @@ import React from 'react';
 import { Platform, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
+import { useBevel } from '@/hooks/useBevel';
+import { formatBytes } from '@/utils/format';
 import ToolCard from '@/components/ToolCard';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
-}
-
 export default function CleanScreen() {
   const colors = useColors();
+  const bevel = useBevel();
   const insets = useSafeAreaInsets();
   const { storageStats, mediaBreakdown } = useCleaner();
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
@@ -53,7 +50,7 @@ export default function CleanScreen() {
         </Text>
         <ToolCard
           title="Storage Intelligence"
-          description="Real breakdown of storage by images, videos, audio, screenshots & downloads"
+          description="Real breakdown by images, videos, audio, screenshots & downloads — with trend history"
           icon="bar-chart-2"
           gradientColors={[colors.primary, colors.primary]}
           badge={mediaBreakdown ? `${mediaBreakdown.totalScanned} items` : undefined}
@@ -61,7 +58,7 @@ export default function CleanScreen() {
         />
         <ToolCard
           title="Screenshot Manager"
-          description="Browse, select and delete screenshots from your Screenshots album"
+          description="Browse, select and delete screenshots — they accumulate silently and are easy to miss"
           icon="monitor"
           gradientColors={[colors.success, colors.success]}
           badge={ssBadge}
@@ -76,7 +73,7 @@ export default function CleanScreen() {
         </Text>
         <ToolCard
           title="Junk Cleaner"
-          description="Scans app cache, large downloads & old videos — real files only"
+          description="Finds app cache, large downloads (>30 MB) & old videos (>90 days) — real files only"
           icon="trash-2"
           gradientColors={[colors.primary, colors.primary]}
           badge={cacheBadge}
@@ -84,7 +81,7 @@ export default function CleanScreen() {
         />
         <ToolCard
           title="Cache Cleaner"
-          description="Auto-clears own cache, Smart Sweep for system app caches"
+          description="Clears own cache instantly, then guides you through system app caches one by one"
           icon="cpu"
           gradientColors={[colors.accent, colors.accent]}
           badge={cacheBadge}
@@ -99,14 +96,14 @@ export default function CleanScreen() {
         </Text>
         <ToolCard
           title="Duplicate Finder"
-          description="Groups photos & media with matching filenames or dimensions"
+          description="Groups photos by matching filename or same resolution + same day (burst duplicates)"
           icon="copy"
           gradientColors={['#39FF14', '#39FF14']}
           onPress={() => router.push('/duplicate-finder')}
         />
         <ToolCard
           title="Large File Scanner"
-          description="Find the biggest media files by estimated size — sort, filter, delete"
+          description="Finds the biggest media files — videos and images use the most space by far"
           icon="hard-drive"
           gradientColors={['#FFB800', '#FFB800']}
           onPress={() => router.push('/large-files')}
@@ -114,16 +111,10 @@ export default function CleanScreen() {
       </View>
 
       {/* Transparency note */}
-      <View style={[styles.tipCard, {
-        backgroundColor: colors.card,
-        borderTopColor: colors.bevelLight,
-        borderLeftColor: colors.bevelLight,
-        borderBottomColor: colors.bevelDark,
-        borderRightColor: colors.bevelDark,
-      }]}>
+      <View style={[styles.tipCard, bevel, { backgroundColor: colors.card }]}>
         <Text style={[styles.tipHead, { color: colors.primary }]}>{'[!] ANDROID LIMITS'}</Text>
         <Text style={[styles.tipText, { color: colors.mutedForeground }]}>
-          {'> '} Modern Android restricts filesystem access. All scans use real MediaLibrary and FileSystem APIs — no fake results. Video and image sizes are estimated from dimensions.
+          {'> '} Modern Android restricts filesystem access. All scans use real MediaLibrary and FileSystem APIs — no fabricated results. Video and image sizes are estimated from dimensions and labelled with ~.
         </Text>
       </View>
     </ScrollView>

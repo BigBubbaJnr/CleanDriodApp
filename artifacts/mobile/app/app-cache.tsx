@@ -13,6 +13,9 @@ import {
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
+import { useBevel } from '@/hooks/useBevel';
+import { formatBytes } from '@/utils/format';
+import SegBar from '@/components/SegBar';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import * as IntentLauncher from 'expo-intent-launcher';
@@ -27,12 +30,6 @@ interface AppCacheItem {
   cacheSize: number;
   icon: keyof typeof Feather.glyphMap;
   selected: boolean;
-}
-
-function formatBytes(bytes: number): string {
-  if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
-  if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
-  return (bytes / 1024).toFixed(0) + ' KB';
 }
 
 const BASE_APPS: Omit<AppCacheItem, 'selected'>[] = [
@@ -51,18 +48,6 @@ const BASE_APPS: Omit<AppCacheItem, 'selected'>[] = [
 ];
 
 type Phase = 'idle' | 'auto-clearing' | 'sweep-ready' | 'sweeping' | 'done';
-
-function SegBar({ value, color, total = 16 }: { value: number; color: string; total?: number }) {
-  const colors = useColors();
-  const filled = Math.max(0, Math.min(total, Math.round(value * total)));
-  return (
-    <View style={{ flexDirection: 'row', gap: 2 }}>
-      {Array.from({ length: total }, (_, i) => (
-        <View key={i} style={{ flex: 1, height: 6, backgroundColor: i < filled ? color : colors.border }} />
-      ))}
-    </View>
-  );
-}
 
 export default function AppCacheScreen() {
   const colors = useColors();
@@ -88,13 +73,13 @@ export default function AppCacheScreen() {
 
   const finishSweep = useCallback(async (sweepApps: AppCacheItem[]) => {
     sweepActiveRef.current = false;
-    const freed = sweepApps.reduce((acc, a) => acc + a.cacheSize, 0);
-    setTotalFreed(prev => prev + freed);
+    // Can't read how much Android actually freed — Smart Sweep only guides you through Settings.
+    // Record 0 bytes so history stays honest; the real savings show up in Storage Intelligence.
     await addHistoryItem({
       date: new Date().toISOString(),
-      bytesFreed: freed,
+      bytesFreed: 0,
       type: 'cache',
-      label: `Smart Sweep — ${sweepApps.length} apps cleared`,
+      label: `Smart Sweep — ${sweepApps.length} app${sweepApps.length !== 1 ? 's' : ''} guided through Settings`,
     });
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -155,11 +140,10 @@ export default function AppCacheScreen() {
       const info = await FileSystem.getInfoAsync(FileSystem.cacheDirectory!);
       if (info.exists) { freed += (info as any).size ?? 0; await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true }); }
     } catch {}
-    freed += 280 * 1024 * 1024; // accessible temp caches
     await new Promise(r => setTimeout(r, 1500));
     setAutoClearedBytes(freed);
     setTotalFreed(freed);
-    await addHistoryItem({ date: new Date().toISOString(), bytesFreed: freed, type: 'cache', label: 'Auto Cache Clear — accessible caches' });
+    await addHistoryItem({ date: new Date().toISOString(), bytesFreed: freed, type: 'cache', label: 'Auto Cache Clear — own app cache cleared' });
     setPhase('sweep-ready');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
   }, [addHistoryItem]);
@@ -185,16 +169,10 @@ export default function AppCacheScreen() {
     setApps(prev => prev.map(a => a.id === id ? { ...a, selected: !a.selected } : a));
 
   const selectedApps = apps.filter(a => a.selected);
-  const selectedCacheSize = selectedApps.reduce((acc, a) => acc + a.cacheSize, 0);
   const currentSweepApp = sweepAppsRef.current[sweepIndex];
   const sweepTotal = sweepAppsRef.current.length;
   const sweepDone = clearedInSweep.size;
-
-  const bevelRaised = {
-    borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
-    borderBottomColor: colors.bevelDark, borderRightColor: colors.bevelDark,
-    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
-  };
+  const bevel = useBevel();
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -204,7 +182,7 @@ export default function AppCacheScreen() {
         backgroundColor: colors.background,
         borderBottomColor: colors.primary + '40',
       }]}>
-        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevelRaised, { backgroundColor: colors.card }]}>
+        <Pressable onPress={() => router.back()} style={[styles.backBtn, bevel, { backgroundColor: colors.card }]}>
           <Feather name="arrow-left" size={16} color={colors.foreground} />
         </Pressable>
         <View>
@@ -222,7 +200,7 @@ export default function AppCacheScreen() {
         {phase === 'idle' && (
           <Animated.View entering={FadeIn} style={{ gap: 12 }}>
             {/* Step 1 */}
-            <View style={[styles.stepPanel, bevelRaised, { backgroundColor: colors.card, borderTopColor: colors.primary, borderLeftColor: colors.primary }]}>
+            <View style={[styles.stepPanel, bevel, { backgroundColor: colors.card, borderTopColor: colors.primary, borderLeftColor: colors.primary }]}>
               <View style={[styles.stepBadge, { backgroundColor: colors.primary }]}>
                 <Text style={[styles.stepNum, { color: colors.primaryForeground }]}>1</Text>
               </View>
@@ -246,7 +224,7 @@ export default function AppCacheScreen() {
             </View>
 
             {/* Step 2 */}
-            <View style={[styles.stepPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.stepPanel, bevel, { backgroundColor: colors.card }]}>
               <View style={[styles.stepBadge, { backgroundColor: colors.accent }]}>
                 <Text style={[styles.stepNum, { color: '#FFF' }]}>2</Text>
               </View>
@@ -267,7 +245,7 @@ export default function AppCacheScreen() {
             <Text style={[styles.sectionLabel, { color: colors.primary }]}>
               {'── SELECT APPS FOR SWEEP ─────────────'}
             </Text>
-            <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.listPanel, bevel, { backgroundColor: colors.card }]}>
               {apps.map((app, idx) => (
                 <Pressable
                   key={app.id}
@@ -298,7 +276,7 @@ export default function AppCacheScreen() {
         {/* ── AUTO-CLEARING ── */}
         {phase === 'auto-clearing' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.scanningBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.scanningBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.scanningTitle, { color: colors.primary }]}>{'[AUTO-CLEARING...]'}</Text>
               <ActivityIndicator color={colors.primary} />
               <Text style={[styles.tickerLine, { color: colors.mutedForeground }]}>
@@ -311,7 +289,7 @@ export default function AppCacheScreen() {
         {/* ── SWEEP READY ── */}
         {phase === 'sweep-ready' && (
           <Animated.View entering={FadeIn} style={{ gap: 12 }}>
-            <View style={[styles.doneBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] AUTO-CLEAR COMPLETE'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(autoClearedBytes)}</Text>
               <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>FREED AUTOMATICALLY</Text>
@@ -320,7 +298,7 @@ export default function AppCacheScreen() {
             <Text style={[styles.sectionLabel, { color: colors.primary }]}>
               {'── SWEEP SYSTEM APPS ────────────────'}
             </Text>
-            <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.listPanel, bevel, { backgroundColor: colors.card }]}>
               {apps.map((app, idx) => (
                 <Pressable
                   key={app.id}
@@ -348,7 +326,7 @@ export default function AppCacheScreen() {
         {/* ── SWEEPING ── */}
         {phase === 'sweeping' && (
           <Animated.View entering={FadeIn} style={{ gap: 12 }}>
-            <View style={[styles.scanningBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.scanningBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.scanningTitle, { color: colors.accent }]}>{'[SMART SWEEP ACTIVE]'}</Text>
               <Text style={[styles.scanningPct, { color: colors.accent }]}>
                 {sweepDone}/{sweepTotal}
@@ -376,7 +354,7 @@ export default function AppCacheScreen() {
 
             {/* Cleared log */}
             {sweepDone > 0 && (
-              <View style={[styles.listPanel, bevelRaised, { backgroundColor: colors.card }]}>
+              <View style={[styles.listPanel, bevel, { backgroundColor: colors.card }]}>
                 {sweepAppsRef.current.slice(0, sweepDone).map((app, idx) => (
                   <View key={app.id} style={[
                     styles.appRow,
@@ -395,7 +373,7 @@ export default function AppCacheScreen() {
         {/* ── DONE ── */}
         {phase === 'done' && (
           <Animated.View entering={FadeIn} style={styles.center}>
-            <View style={[styles.doneBox, bevelRaised, { backgroundColor: colors.card }]}>
+            <View style={[styles.doneBox, bevel, { backgroundColor: colors.card }]}>
               <Text style={[styles.doneHead, { color: colors.success }]}>{'[OK] ALL CACHES CLEARED'}</Text>
               <Text style={[styles.doneBytes, { color: colors.primary }]}>{formatBytes(totalFreed)}</Text>
               <Text style={[styles.doneSub, { color: colors.mutedForeground }]}>TOTAL FREED</Text>
@@ -426,7 +404,7 @@ export default function AppCacheScreen() {
           borderTopColor: colors.primary + '40',
         }]}>
           <Text style={[styles.footerSub, { color: colors.mutedForeground }]}>
-            {selectedApps.length} APPS SELECTED  ·  {formatBytes(selectedCacheSize)}
+            {selectedApps.length} APP{selectedApps.length !== 1 ? 'S' : ''} SELECTED FOR SWEEP
           </Text>
           <Pressable onPress={handleStartSweep} style={styles.fullWidth}>
             <View style={[styles.primaryBtn, {
