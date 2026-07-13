@@ -10,7 +10,9 @@ import {
 } from 'react-native';
 import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
-import { useCleaner, estimateImageSize, estimateVideoSize } from '@/context/CleanerContext';
+import { useCleaner, estimateImageSize, estimateVideoSize, getRealFileSize } from '@/context/CleanerContext';
+import { runWithPool } from '@/utils/pool';
+import { POOL_CONCURRENCY } from '@/constants/limits';
 import VerifyingPanel from '@/components/VerifyingPanel';
 import ConfirmDeleteSheet from '@/components/ConfirmDeleteSheet';
 import { useBevel } from '@/hooks/useBevel';
@@ -104,7 +106,8 @@ export default function JunkCleanerScreen() {
       } else {
         addLog('app cache is empty');
       }
-    } catch {
+    } catch (err) {
+      logError('JunkCleaner/cache', err);
       addLog('could not read app cache');
     }
 
@@ -184,7 +187,8 @@ export default function JunkCleanerScreen() {
       } else {
         addLog('no Downloads album found');
       }
-    } catch {
+    } catch (err) {
+      logError('JunkCleaner/downloads', err);
       addLog('could not scan Downloads album');
     }
 
@@ -220,11 +224,10 @@ export default function JunkCleanerScreen() {
         }
       }
       addLog(`found ${oldVideoCount} old large videos (>200 MB, >90 days old)`);
-    } catch {
+    } catch (err) {
+      logError('JunkCleaner/videos', err);
       addLog('could not scan video library');
     }
-
-    setScanProgress(100);
 
     // Deduplicate by assetId — an asset can appear in both 'download' and 'large_video'
     const seenAssets = new Set<string>();
@@ -234,6 +237,35 @@ export default function JunkCleanerScreen() {
       seenAssets.add(item.assetId);
       return true;
     });
+
+    // ── Phase 2: Resolve real sizes for top 20 media items ───────────────────
+    const topMedia = deduped
+      .filter(i => i.assetId && i.sizeIsEstimated)
+      .sort((a, b) => b.size - a.size)
+      .slice(0, 20);
+
+    if (topMedia.length > 0) {
+      addLog(`measuring real sizes for ${topMedia.length} largest item(s)...`);
+      setScanProgress(92);
+      await runWithPool(topMedia, async (item) => {
+        try {
+          const info = await MediaLibrary.getAssetInfoAsync(item.assetId!);
+          if (info.localUri) {
+            const realSize = await getRealFileSize(info.localUri);
+            if (realSize !== null && realSize > 0) {
+              item.size = realSize;
+              item.sizeIsEstimated = false;
+            }
+          }
+        } catch (err) {
+          logError('JunkCleaner/realSize', err);
+        }
+      }, POOL_CONCURRENCY);
+      // Re-sort after real sizes may have changed rankings
+      deduped.sort((a, b) => b.size - a.size);
+    }
+
+    setScanProgress(100);
     addLog(`scan complete — ${deduped.length} unique item${deduped.length !== 1 ? 's' : ''} found`);
     await sleep(300);
 
