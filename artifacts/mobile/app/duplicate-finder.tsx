@@ -77,6 +77,12 @@ function getDuplicateRecommendation(
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
+/**
+ * Minimal asset shape used throughout the grouping logic.
+ * Both MediaLibrary.Asset (live scan) and RichAsset (cache) satisfy this shape.
+ */
+type PhotoLike = Pick<MediaLibrary.Asset, 'id' | 'filename' | 'width' | 'height' | 'creationTime' | 'uri'>;
+
 interface DuplicateGroup {
   id: string;
   displayFilename: string;
@@ -103,7 +109,7 @@ interface DuplicateGroup {
 export default function DuplicateFinderScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats, richScanData, scanTruncated: globalScanTruncated } = useCleaner();
 
   const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done' | 'error'>('idle');
   const scanStartRef = useRef<number>(0);
@@ -148,34 +154,50 @@ export default function DuplicateFinderScreen() {
       return;
     }
 
-    // ── Phase 1: Load all photos (paginated) ────────────────────────────────
-    addLog('loading photo library...');
-    let allPhotos: MediaLibrary.Asset[] = [];
-    let cursor: string | undefined;
-    do {
-      const page = await MediaLibrary.getAssetsAsync({
-        first: 500,
-        after: cursor,
-        mediaType: [MediaLibrary.MediaType.photo],
-        sortBy: [MediaLibrary.SortBy.creationTime],
-      });
-      allPhotos = [...allPhotos, ...page.assets];
-      cursor = page.hasNextPage ? page.endCursor : undefined;
-      setScanProgress(Math.min(40, 5 + Math.floor(allPhotos.length / 50)));
-      if (allPhotos.length % 500 === 0 && allPhotos.length > 0) {
-        addLog(`loaded ${allPhotos.length} photos...`);
-      }
-    } while (cursor && allPhotos.length < SCAN_CAP_TOOL);
+    // ── Phase 1: Load photos — from cache or paginated MediaLibrary ─────────
+    const CACHE_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
+    let allPhotos: PhotoLike[] = [];
+    let wasTruncated = false;
 
-    const wasTruncated = !!cursor;
+    const cacheAge = richScanData?.timestamp
+      ? Date.now() - new Date(richScanData.timestamp).getTime()
+      : Infinity;
+
+    if (richScanData && cacheAge < CACHE_MAX_AGE_MS) {
+      // ── Fast path: reuse Storage Intelligence scan ───────────────────────
+      addLog(`using cached scan (${Math.round(cacheAge / 60_000)}m old)...`);
+      allPhotos = richScanData.assets.filter(a => a.mediaType === 'photo');
+      wasTruncated = globalScanTruncated;
+      setScanProgress(45);
+    } else {
+      // ── Live path: paginate MediaLibrary ────────────────────────────────
+      addLog('loading photo library...');
+      let cursor: string | undefined;
+      do {
+        const page = await MediaLibrary.getAssetsAsync({
+          first: 500,
+          after: cursor,
+          mediaType: [MediaLibrary.MediaType.photo],
+          sortBy: [MediaLibrary.SortBy.creationTime],
+        });
+        allPhotos = [...allPhotos, ...page.assets];
+        cursor = page.hasNextPage ? page.endCursor : undefined;
+        setScanProgress(Math.min(40, 5 + Math.floor(allPhotos.length / 50)));
+        if (allPhotos.length % 500 === 0 && allPhotos.length > 0) {
+          addLog(`loaded ${allPhotos.length} photos...`);
+        }
+      } while (cursor && allPhotos.length < SCAN_CAP_TOOL);
+      wasTruncated = !!cursor;
+      setScanProgress(45);
+    }
+
     setScanWasTruncated(wasTruncated);
     if (wasTruncated) addLog(`[!] large library — checked first ${allPhotos.length} photos`);
-    addLog(`total: ${allPhotos.length} photos loaded`);
-    setScanProgress(45);
+    addLog(`total: ${allPhotos.length} photos`);
 
     // ── Phase 2: Build filename groups ──────────────────────────────────────
     addLog('grouping by filename...');
-    const filenameMap = new Map<string, MediaLibrary.Asset[]>();
+    const filenameMap = new Map<string, PhotoLike[]>();
     for (const asset of allPhotos) {
       const key = normalizeFilename(asset.filename);
       if (key.length < 3) continue; // skip trivially short names
@@ -187,7 +209,7 @@ export default function DuplicateFinderScreen() {
 
     // ── Phase 3: Build dimension+date groups ────────────────────────────────
     addLog('grouping by dimension + date...');
-    const dimDateMap = new Map<string, MediaLibrary.Asset[]>();
+    const dimDateMap = new Map<string, PhotoLike[]>();
     for (const asset of allPhotos) {
       if (asset.width === 0 || asset.height === 0) continue;
       const date = new Date(asset.creationTime * 1000);
@@ -209,7 +231,7 @@ export default function DuplicateFinderScreen() {
       .filter(a => a.width > 0 && a.height > 0)
       .sort((a, b) => a.creationTime - b.creationTime);
 
-    const burstGroupsList: MediaLibrary.Asset[][] = [];
+    const burstGroupsList: PhotoLike[][] = [];
     let bi = 0;
     while (bi < sortedByTime.length) {
       let bj = bi + 1;
@@ -450,7 +472,7 @@ export default function DuplicateFinderScreen() {
       setScanError(e instanceof Error ? e.message : 'UNEXPECTED ERROR DURING SCAN');
       setPhase('error');
     }
-  }, [addLog]);
+  }, [addLog, richScanData, globalScanTruncated]);
 
   const toggleInGroup = (groupId: string, idx: number) =>
     setGroups(prev => prev.map(g => {
