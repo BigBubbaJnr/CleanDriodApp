@@ -1,0 +1,517 @@
+Prompt for Replit
+
+You are continuing work on the existing CleanDroid project.
+
+This is NOT a rewrite.
+Do NOT redesign the UI.
+Do NOT remove existing features.
+Do NOT refactor working code unless absolutely necessary.
+
+The goal of this update is to prepare CleanDroid for a private beta running on my own personal Android phone.
+
+The highest priority is safety, reliability, stability, and trust.
+
+The app must never accidentally delete important user data.
+
+I would rather the app miss junk than delete something valuable.
+
+Before Writing Any Code
+
+First perform a complete review of the existing codebase.
+
+Determine:
+
+what already exists
+what already works
+what has already been improved
+what should remain untouched
+
+Avoid replacing working systems.
+
+Only improve them.
+
+If an existing implementation already satisfies the requirement, leave it alone.
+
+After analysing the project, provide me with a short implementation plan before making changes.
+
+Overall Goal
+
+This update is NOT about adding flashy features.
+
+It is about making CleanDroid feel like a trustworthy professional cleaning application.
+
+Every action should prioritise:
+
+• Safety
+
+• Predictability
+
+• Stability
+
+• Battery efficiency
+
+• Memory efficiency
+
+• Clear user communication
+
+Phase 1 – Safety Improvements
+
+This is the highest priority.
+
+Before ANY delete operation occurs:
+
+Implement a full confirmation workflow.
+
+The user must always see:
+
+number of files
+storage that will be recovered
+category being cleaned
+
+Example:
+
+Delete 128 duplicate photos?
+
+Storage recovered:
+
+2.48 GB
+
+This action cannot be undone.
+
+Cancel
+
+Delete
+
+Never allow immediate deletion from a single button press.
+
+Add a second protection layer.
+
+Before deleting:
+
+Validate every file.
+
+Ensure:
+
+file still exists
+file path is valid
+permission still exists
+file belongs to the intended scan result
+
+If validation fails:
+
+Skip the file.
+
+Never crash.
+
+Create a Safe Delete service.
+
+Every delete operation throughout the app must go through ONE central service.
+
+Example:
+
+SafeDeleteService
+
+Responsibilities:
+
+validation
+logging
+confirmation
+deletion
+error handling
+reporting
+
+Never duplicate deletion logic throughout the project.
+
+Implement a developer Safe Mode.
+
+In Settings add:
+
+Developer Settings
+
+Safe Mode
+
+When enabled:
+
+NO files are deleted.
+
+Instead:
+
+Simulate deletion.
+
+Generate the report exactly as if the clean occurred.
+
+This allows safe beta testing.
+
+Safe Mode should default to ON in Debug builds.
+
+OFF in Release builds.
+
+Phase 2 – Cleaning Reliability
+
+Review every cleaner.
+
+Determine whether each result is:
+
+Real
+
+Estimated
+
+Simulated
+
+If simulated:
+
+Clearly mark it.
+
+Never display fake storage values.
+
+Never hardcode recoverable storage.
+
+All displayed storage values must come from real calculations.
+
+If something cannot be calculated accurately:
+
+Display
+
+Estimated
+
+instead of pretending.
+
+Review the Junk Cleaner.
+
+Determine whether every category is genuinely cleaned.
+
+If not:
+
+Disable unsupported categories rather than pretending they work.
+
+It is better to clean five real things than twenty fake things.
+
+Phase 3 – Storage Intelligence
+
+Continue improving the Storage Intelligence engine.
+
+Improve categorisation.
+
+Instead of simply saying
+
+4 GB Recoverable
+
+Break it down.
+
+Example:
+
+Downloads
+
+1.2 GB
+
+Screenshots
+
+840 MB
+
+Duplicate Photos
+
+620 MB
+
+APK Files
+
+510 MB
+
+Empty Folders
+
+12
+
+Broken Media
+
+8
+
+Temporary Files
+
+180 MB
+
+Users should understand exactly where their storage is going.
+
+Phase 4 – User Trust
+
+After every clean generate a detailed report.
+
+Example:
+
+Cleaning Complete
+
+Recovered:
+
+1.84 GB
+
+Deleted:
+
+36 duplicate images
+
+14 APK installers
+
+22 cache files
+
+18 empty folders
+
+Skipped:
+
+4 protected files
+
+Protected:
+
+Camera
+
+Documents
+
+Downloads
+
+WhatsApp
+
+No personal documents were removed.
+
+No system files were modified.
+
+Save this report into cleaning history.
+
+Phase 5 – Logging
+
+Improve internal logging.
+
+Create structured logging.
+
+Instead of random console logs.
+
+Use levels.
+
+INFO
+
+WARNING
+
+ERROR
+
+DEBUG
+
+Every cleaner should log:
+
+Scan started
+
+Permission granted
+
+Files found
+
+Files skipped
+
+Deletion complete
+
+Time taken
+
+Errors
+
+Logs should be easy to disable in Release builds.
+
+Phase 6 – Error Handling
+
+Review every async operation.
+
+Never allow:
+
+Unhandled Promise rejection
+
+Silent catch block
+
+App crash
+
+Replace every failure with graceful recovery.
+
+Examples:
+
+Permission denied
+
+Show explanation
+
+Storage unavailable
+
+Show retry button
+
+File disappeared
+
+Skip it
+
+Continue cleaning
+
+Unexpected exception
+
+Log error
+
+Continue
+
+The app should almost never crash.
+
+Phase 7 – Permissions
+
+Review Android permissions.
+
+Ensure only required permissions remain.
+
+Verify modern Android permission handling.
+
+Check:
+
+Android 13
+
+Android 14
+
+Android 15 compatibility.
+
+Gracefully handle:
+
+Permission denied
+
+Permission revoked
+
+Limited media access
+
+Never repeatedly request permissions.
+
+Phase 8 – Performance
+
+Review every scan.
+
+Look for:
+
+Repeated filesystem reads
+
+Duplicate scanning
+
+Repeated hashing
+
+Repeated MediaLibrary calls
+
+Reduce unnecessary work.
+
+Continue using runWithPool.
+
+Ensure large scans never freeze the UI.
+
+Show scan progress.
+
+Allow cancellation.
+
+Phase 9 – Beta Polish
+
+Review every screen.
+
+Ensure:
+
+No placeholder text
+
+No TODO comments
+
+No fake buttons
+
+No unfinished settings
+
+No broken navigation
+
+No unused toggles
+
+If a feature is unfinished:
+
+Disable it.
+
+Label it:
+
+Coming Soon
+
+instead of pretending it works.
+
+Phase 10 – Code Quality
+
+Do NOT rewrite architecture.
+
+Continue current structure.
+
+If new systems are required:
+
+Keep them modular.
+
+Suggested folders:
+
+services/
+
+validators/
+
+logging/
+
+permissions/
+
+safety/
+
+Continue separating:
+
+UI
+
+Business Logic
+
+Filesystem
+
+Utilities
+
+Never place filesystem logic directly inside screens.
+
+Final Deliverables
+
+When finished provide:
+
+1.
+
+Summary of every file modified.
+
+2.
+
+Reason each change was made.
+
+3.
+
+Safety improvements added.
+
+4.
+
+Performance improvements.
+
+5.
+
+Any remaining known issues.
+
+6.
+
+Features intentionally postponed until Version 1.0.
+
+7.
+
+A confidence score out of 10 for private beta readiness.
+
+8.
+
+A checklist of manual tests I should perform on my personal phone before trusting the cleaner.
+
+Important Rules
+
+Do NOT redesign the UI.
+
+Do NOT remove working features.
+
+Do NOT make unnecessary architectural changes.
+
+Do NOT introduce fake cleaning.
+
+Do NOT inflate storage numbers.
+
+Do NOT exaggerate scan results.
+
+Do NOT sacrifice safety for larger cleaning numbers.
+
+If a feature cannot be implemented safely, leave it disabled and explain why.
+
+The objective is to produce the most trustworthy Android cleaner possible, even if it cleans less than competitors today. Every deletion must be deliberate, validated, logged, and easy for the user to understand.
+
+I think this is the right point in your project to change strategy. Earlier prompts were about building features. This one is about building trust. If CleanDroid earns a reputation for never deleting the wrong thing and always explaining what it's doing, you'll have a much stronger foundation before moving on to a Version 1.0 feature expansion.
