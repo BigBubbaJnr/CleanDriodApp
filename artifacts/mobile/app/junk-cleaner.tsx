@@ -12,6 +12,7 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, estimateVideoSize } from '@/context/CleanerContext';
 import VerifyingPanel from '@/components/VerifyingPanel';
+import ConfirmDeleteSheet from '@/components/ConfirmDeleteSheet';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes } from '@/utils/format';
 import { sleep } from '@/utils/sleep';
@@ -23,6 +24,8 @@ import * as FileSystem from 'expo-file-system/legacy';
 import * as MediaLibrary from 'expo-media-library';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { safeDelete } from '@/services/SafeDelete';
+import { logInfo, logWarn, logError } from '@/utils/logger';
 
 type JunkCategory = 'app_cache' | 'download' | 'large_video';
 
@@ -53,7 +56,7 @@ const CAT_ICONS: Record<JunkCategory, keyof typeof Feather.glyphMap> = {
 export default function JunkCleanerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem, addJournalEntry, storageStats } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats, safeMode } = useCleaner();
 
   const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done' | 'error'>('idle');
   const scanStartRef = useRef<number>(0);
@@ -62,6 +65,7 @@ export default function JunkCleanerScreen() {
   const [scanProgress, setScanProgress] = useState(0);
   const [scanLog, setScanLog] = useState<string[]>([]);
   const [bytesFreed, setBytesFreed] = useState(0);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
@@ -118,12 +122,16 @@ export default function JunkCleanerScreen() {
     addLog('requesting media library access...');
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== 'granted') {
-      addLog('[!] media access denied — only app cache scanned');
+      logWarn('JunkCleaner', 'Media permission denied — app cache only');
+      addLog('[!] media access denied — showing app cache results only');
       setScanProgress(100);
       setItems(found);
+      setPhase('verifying');
+      await sleep(800);
       setPhase('results');
       return;
     }
+    logInfo('JunkCleaner', 'Media permission granted');
 
     setScanProgress(30);
 
@@ -252,34 +260,47 @@ export default function JunkCleanerScreen() {
   const selectedSize = selectedItems.reduce((acc, i) => acc + i.size, 0);
   const totalSize = items.reduce((acc, i) => acc + i.size, 0);
 
-  const handleClean = async () => {
+  const handleClean = useCallback(async () => {
+    setShowConfirm(false);
     if (selectedItems.length === 0) return;
     setPhase('cleaning');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    logInfo('JunkCleaner', `Clean started — ${selectedItems.length} item(s), safeMode=${safeMode}`);
 
     let bytesActuallyFreed = 0;
     let itemsActuallyRemoved = 0;
 
-    // Delete own app cache
+    // Own app cache — CleanDroid's own directory; delete directly (no user data at risk)
     const cacheItems = selectedItems.filter(i => i.isOwnCache);
     if (cacheItems.length > 0) {
       try {
-        await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true });
+        if (safeMode) {
+          logInfo('JunkCleaner', '[SAFE MODE] Would clear app cache directory');
+        } else {
+          await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true });
+          logInfo('JunkCleaner', 'App cache cleared');
+        }
         bytesActuallyFreed += cacheItems.reduce((acc, i) => acc + i.size, 0);
         itemsActuallyRemoved += cacheItems.length;
-      } catch {}
+      } catch (err) {
+        logError('JunkCleaner/cache', err);
+      }
     }
 
-    // Delete MediaLibrary items — record bytes only on success
+    // MediaLibrary items — routed through SafeDelete for validation + logging
     const mediaItems = selectedItems.filter(i => i.assetId);
     if (mediaItems.length > 0 && Platform.OS !== 'web') {
-      try {
-        await MediaLibrary.deleteAssetsAsync(mediaItems.map(i => i.assetId!));
-        bytesActuallyFreed += mediaItems.reduce((acc, i) => acc + i.size, 0);
-        itemsActuallyRemoved += mediaItems.length;
-      } catch {}
+      const result = await safeDelete({
+        items: mediaItems.map(i => ({ name: i.name, estimatedBytes: i.size, assetId: i.assetId })),
+        category: 'Junk Files',
+        safeMode,
+      });
+      bytesActuallyFreed += result.bytesFreed;
+      itemsActuallyRemoved += result.deleted;
+      if (result.failed > 0) logWarn('JunkCleaner', `${result.failed} item(s) failed to delete`);
     }
 
+    logInfo('JunkCleaner', `Clean complete — freed ${bytesActuallyFreed} bytes, removed ${itemsActuallyRemoved} item(s)`);
     await sleep(800);
     setBytesFreed(bytesActuallyFreed);
     if (bytesActuallyFreed > 0 || itemsActuallyRemoved > 0) {
@@ -287,7 +308,7 @@ export default function JunkCleanerScreen() {
         date: new Date().toISOString(),
         bytesFreed: bytesActuallyFreed,
         type: 'junk',
-        label: `Junk Cleaner — ${itemsActuallyRemoved} item${itemsActuallyRemoved !== 1 ? 's' : ''} removed`,
+        label: `Junk Cleaner — ${itemsActuallyRemoved} item${itemsActuallyRemoved !== 1 ? 's' : ''} removed${safeMode ? ' [SAFE MODE]' : ''}`,
       });
     }
     await addJournalEntry({
@@ -302,7 +323,7 @@ export default function JunkCleanerScreen() {
     });
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
+  }, [selectedItems, safeMode, items, totalSize, storageStats, addHistoryItem, addJournalEntry]);
 
   const bevel = useBevel();
 
@@ -513,7 +534,7 @@ export default function JunkCleanerScreen() {
             {selectedItems.length} SELECTED  ·  ~{formatBytes(selectedSize)}
           </Text>
           <Pressable
-            onPress={handleClean}
+            onPress={() => setShowConfirm(true)}
             disabled={selectedItems.length === 0 || phase === 'cleaning'}
             style={styles.fullWidth}
           >
@@ -537,6 +558,16 @@ export default function JunkCleanerScreen() {
           </Pressable>
         </View>
       )}
+
+      <ConfirmDeleteSheet
+        visible={showConfirm}
+        category="Junk Files"
+        fileCount={selectedItems.length}
+        totalBytes={selectedSize}
+        safeMode={safeMode}
+        onCancel={() => setShowConfirm(false)}
+        onConfirm={handleClean}
+      />
     </View>
   );
 }

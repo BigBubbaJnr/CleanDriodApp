@@ -9,9 +9,16 @@ import * as Linking from 'expo-linking';
 import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { router } from 'expo-router';
-import { getErrorLog, clearErrorLog } from '@/utils/logger';
+import { getErrorLog, clearErrorLog, type LogLevel } from '@/utils/logger';
 
 const FEEDBACK_EMAIL = 'mailto:hello@cleandroid.app?subject=CleanDroid%20Feedback';
+
+const LEVEL_COLORS: Record<LogLevel, string> = {
+  DEBUG: '#888',
+  INFO: '#4CAF50',
+  WARN: '#FF9800',
+  ERROR: '#F44336',
+};
 
 function SysRow({
   label, value, icon, right, onPress, danger,
@@ -43,24 +50,31 @@ function SysRow({
 export default function SettingsScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { rootEnabled, setRootEnabled, totalBytesFreed, history } = useCleaner();
+  const { rootEnabled, totalBytesFreed, history, safeMode, setSafeMode } = useCleaner();
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
 
   const [errorLogOpen, setErrorLogOpen] = useState(false);
 
-  const handleRootToggle = (val: boolean) => {
-    if (val) {
+  const handleSafeModeToggle = (val: boolean) => {
+    if (!val) {
       Alert.alert(
-        'ENABLE ROOT MODE?',
-        'Root access opens system-level file paths for deeper scanning. Requires a rooted device. Standard cleaning is always available without root.',
+        'DISABLE SAFE MODE?',
+        'Safe Mode prevents real file deletion during testing. Disabling it means the next clean will permanently delete files from your device.\n\nOnly disable this when you are ready for real cleaning.',
         [
-          { text: 'CANCEL', style: 'cancel' },
-          { text: 'ENABLE', onPress: () => { setRootEnabled(true); Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium); } },
+          { text: 'KEEP SAFE MODE', style: 'cancel' },
+          {
+            text: 'DISABLE',
+            style: 'destructive',
+            onPress: () => {
+              setSafeMode(false);
+              Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+            },
+          },
         ]
       );
     } else {
-      setRootEnabled(false);
+      setSafeMode(true);
       Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
     }
   };
@@ -96,8 +110,8 @@ export default function SettingsScreen() {
           {[
             { k: 'TOTAL_SCANS', v: String(history.length).padStart(4, '0'), color: colors.primary },
             { k: 'BYTES_FREED ', v: formatBytes(totalBytesFreed), color: colors.accent },
+            { k: 'SAFE_MODE   ', v: safeMode ? 'ON — SIMULATION' : 'OFF — LIVE MODE', color: safeMode ? colors.warning : colors.success },
             { k: 'LICENSE     ', v: 'FREE / OPEN', color: colors.success },
-            { k: 'ROOT_ACCESS ', v: rootEnabled ? 'ENABLED' : 'DISABLED', color: rootEnabled ? colors.success : colors.mutedForeground },
           ].map(row => (
             <View key={row.k} style={styles.readoutRow}>
               <Text style={[styles.readoutKey, { color: colors.mutedForeground }]}>{row.k}</Text>
@@ -106,6 +120,52 @@ export default function SettingsScreen() {
             </View>
           ))}
         </View>
+      </View>
+
+      {/* Developer Settings */}
+      <Text style={[styles.sectionLabel, { color: colors.primary }]}>
+        {'── DEVELOPER ────────────────────────'}
+      </Text>
+      <View style={[styles.panel, {
+        backgroundColor: colors.card,
+        borderTopColor: colors.bevelLight,
+        borderLeftColor: colors.bevelLight,
+        borderBottomColor: colors.bevelDark,
+        borderRightColor: colors.bevelDark,
+      }]}>
+        <SysRow
+          icon="shield"
+          label="Safe Mode"
+          value={safeMode
+            ? 'ON — SIMULATING DELETIONS, NO FILES TOUCHED'
+            : 'OFF — NEXT CLEAN WILL DELETE REAL FILES'}
+          danger={!safeMode}
+          right={
+            <Switch
+              value={safeMode}
+              onValueChange={handleSafeModeToggle}
+              trackColor={{ false: colors.destructive + '60', true: colors.warning + '60' }}
+              thumbColor={safeMode ? colors.warning : colors.destructive}
+            />
+          }
+        />
+      </View>
+
+      {/* Safe Mode explanation box */}
+      <View style={[styles.safeBox, {
+        borderColor: safeMode ? colors.warning + '50' : colors.destructive + '50',
+        backgroundColor: safeMode ? colors.warning + '07' : colors.destructive + '05',
+      }]}>
+        <Feather
+          name={safeMode ? 'shield' : 'alert-triangle'}
+          size={12}
+          color={safeMode ? colors.warning : colors.destructive}
+        />
+        <Text style={[styles.safeBoxText, { color: colors.mutedForeground }]}>
+          {safeMode
+            ? '> Safe Mode is ON. All cleaners will simulate deletion — no files will be touched. Reports generate as normal. Default in development builds.'
+            : '> Safe Mode is OFF. The next clean will permanently delete selected files. Only disable once you have tested with Safe Mode.'}
+        </Text>
       </View>
 
       {/* Advanced */}
@@ -122,13 +182,13 @@ export default function SettingsScreen() {
         <SysRow
           icon="shield"
           label="Root Mode"
-          value={rootEnabled ? 'ACTIVE — SYSTEM-LEVEL ACCESS' : 'INACTIVE — STANDARD MODE'}
+          value="COMING SOON — REQUIRES ROOTED DEVICE"
           right={
             <Switch
-              value={rootEnabled}
-              onValueChange={handleRootToggle}
-              trackColor={{ false: colors.border, true: colors.primary + '60' }}
-              thumbColor={rootEnabled ? colors.primary : colors.mutedForeground}
+              value={false}
+              disabled
+              trackColor={{ false: colors.border, true: colors.border }}
+              thumbColor={colors.mutedForeground}
             />
           }
         />
@@ -180,7 +240,7 @@ export default function SettingsScreen() {
         </Text>
       </View>
 
-      {/* Error log — shown only when there are entries */}
+      {/* Diagnostic log — shown only when there are entries */}
       {errorLog.length > 0 && (
         <>
           <Text style={[styles.sectionLabel, { color: colors.primary }]}>
@@ -200,12 +260,12 @@ export default function SettingsScreen() {
                 setErrorLogOpen(v => !v);
                 Haptics.selectionAsync();
               }}
-              accessibilityLabel={errorLogOpen ? 'Collapse error log' : 'Expand error log'}
+              accessibilityLabel={errorLogOpen ? 'Collapse diagnostic log' : 'Expand diagnostic log'}
               accessibilityRole="button"
             >
-              <Feather name="alert-triangle" size={13} color={colors.destructive} />
-              <Text style={[styles.errorLogTitle, { color: colors.destructive }]}>
-                {'[ERROR LOG]'}
+              <Feather name="terminal" size={13} color={colors.primary} />
+              <Text style={[styles.errorLogTitle, { color: colors.primary }]}>
+                {'[DIAGNOSTIC LOG]'}
               </Text>
               <Text style={[styles.errorLogCount, { color: colors.mutedForeground }]}>
                 {errorLog.length} ENTR{errorLog.length === 1 ? 'Y' : 'IES'}
@@ -226,13 +286,20 @@ export default function SettingsScreen() {
                       i === errorLog.length - 1 && { borderBottomWidth: 0 },
                     ]}
                   >
-                    <Text style={[styles.errorTimestamp, { color: colors.mutedForeground }]}>
-                      {entry.timestamp.slice(11, 19)}
-                    </Text>
-                    <Text style={[styles.errorTag, { color: colors.destructive }]}>
-                      [{entry.tag}]
-                    </Text>
-                    <Text style={[styles.errorMsg, { color: colors.foreground }]} numberOfLines={2}>
+                    <View style={styles.errorEntryHeader}>
+                      <Text style={[styles.errorTimestamp, { color: colors.mutedForeground }]}>
+                        {entry.ts.slice(11, 19)}
+                      </Text>
+                      <View style={[styles.levelBadge, { backgroundColor: LEVEL_COLORS[entry.level] + '20' }]}>
+                        <Text style={[styles.levelText, { color: LEVEL_COLORS[entry.level] }]}>
+                          {entry.level}
+                        </Text>
+                      </View>
+                      <Text style={[styles.errorTag, { color: colors.primary }]}>
+                        [{entry.tag}]
+                      </Text>
+                    </View>
+                    <Text style={[styles.errorMsg, { color: colors.foreground }]} numberOfLines={3}>
                       {entry.message}
                     </Text>
                   </View>
@@ -246,7 +313,7 @@ export default function SettingsScreen() {
                     setErrorLogOpen(false);
                     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
                   }}
-                  accessibilityLabel="Clear error log"
+                  accessibilityLabel="Clear diagnostic log"
                   accessibilityRole="button"
                 >
                   <Feather name="trash-2" size={12} color={colors.destructive} />
@@ -271,7 +338,7 @@ const styles = StyleSheet.create({
   divider: { height: 1, marginBottom: 20 },
   sectionLabel: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 1, marginBottom: 10 },
   panel: {
-    marginBottom: 20,
+    marginBottom: 12,
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
     overflow: 'hidden',
   },
@@ -290,6 +357,13 @@ const styles = StyleSheet.create({
   sysRowLabel: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
   sysValue: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.5, marginTop: 2 },
   arrow: { fontSize: 14, fontFamily: 'Inter_700Bold' },
+
+  safeBox: {
+    flexDirection: 'row', alignItems: 'flex-start', gap: 8,
+    padding: 12, borderWidth: 1, marginBottom: 20,
+  },
+  safeBoxText: { flex: 1, fontSize: 10, fontFamily: 'Inter_400Regular', lineHeight: 16, letterSpacing: 0.3 },
+
   pledgeBox: {
     padding: 16, gap: 8, marginBottom: 20,
     borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
@@ -297,7 +371,7 @@ const styles = StyleSheet.create({
   pledgeTitle: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
   pledgeText: { fontSize: 11, fontFamily: 'Inter_400Regular', lineHeight: 18 },
 
-  // Error log styles
+  // Diagnostic log styles
   errorLogHeader: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
     padding: 13, borderBottomWidth: 1,
@@ -307,10 +381,13 @@ const styles = StyleSheet.create({
   errorLogBody: { paddingVertical: 4 },
   errorEntry: {
     paddingHorizontal: 13, paddingVertical: 8,
-    borderBottomWidth: 1, gap: 2,
+    borderBottomWidth: 1, gap: 4,
   },
+  errorEntryHeader: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   errorTimestamp: { fontSize: 9, fontFamily: 'Inter_400Regular', letterSpacing: 0.5 },
-  errorTag: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  levelBadge: { paddingHorizontal: 4, paddingVertical: 1 },
+  levelText: { fontSize: 8, fontFamily: 'Inter_700Bold', letterSpacing: 1 },
+  errorTag: { fontSize: 9, fontFamily: 'Inter_700Bold', letterSpacing: 1, flex: 1 },
   errorMsg: { fontSize: 10, fontFamily: 'Inter_400Regular', lineHeight: 14 },
   clearLogBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',

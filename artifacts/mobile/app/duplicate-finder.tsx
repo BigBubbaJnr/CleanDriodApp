@@ -26,7 +26,9 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, getRealFileSize } from '@/context/CleanerContext';
 import { SCAN_CAP_TOOL, POOL_CONCURRENCY } from '@/constants/limits';
-import { logError } from '@/utils/logger';
+import { logError, logInfo, logWarn } from '@/utils/logger';
+import { safeDelete } from '@/services/SafeDelete';
+import ConfirmDeleteSheet from '@/components/ConfirmDeleteSheet';
 import { runWithPool } from '@/utils/pool';
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
@@ -110,7 +112,7 @@ interface DuplicateGroup {
 export default function DuplicateFinderScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem, addJournalEntry, storageStats, richScanData, scanTruncated: globalScanTruncated } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats, richScanData, scanTruncated: globalScanTruncated, safeMode } = useCleaner();
 
   const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done' | 'error'>('idle');
   const scanStartRef = useRef<number>(0);
@@ -121,6 +123,7 @@ export default function DuplicateFinderScreen() {
   const [bytesFreed, setBytesFreed] = useState(0);
   const [scanWasTruncated, setScanWasTruncated] = useState(false);
   const [permissionDenied, setPermissionDenied] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
 
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
@@ -490,29 +493,43 @@ export default function DuplicateFinderScreen() {
   const totalSelectedBytes = groups.reduce((acc, g) => acc + (g.selectedIndexes.size * g.size), 0);
   const totalSelectedCount = groups.reduce((acc, g) => acc + g.selectedIndexes.size, 0);
 
-  const handleClean = async () => {
+  const handleClean = useCallback(async () => {
+    setShowConfirm(false);
     if (totalSelectedCount === 0) return;
     setPhase('cleaning');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    logInfo('DuplicateFinder', `Clean started — ${totalSelectedCount} item(s), safeMode=${safeMode}`);
+
+    // Build the list of asset IDs to delete
+    const toDeleteItems: { assetId: string; bytes: number }[] = [];
+    for (const g of groups) {
+      for (const idx of g.selectedIndexes) {
+        if (g.assetIds[idx]) {
+          toDeleteItems.push({ assetId: g.assetIds[idx], bytes: g.size });
+        }
+      }
+    }
 
     let bytesActuallyFreed = 0;
     let itemsRemoved = 0;
-    const toDelete: string[] = [];
-    for (const g of groups) {
-      for (const idx of g.selectedIndexes) {
-        if (g.assetIds[idx]) toDelete.push(g.assetIds[idx]);
-      }
-    }
-    if (toDelete.length > 0 && Platform.OS !== 'web') {
-      try {
-        await MediaLibrary.deleteAssetsAsync(toDelete);
-        bytesActuallyFreed = totalSelectedBytes;
-        itemsRemoved = toDelete.length;
-      } catch (err) {
-        logError('duplicates/delete', err);
-      }
+
+    if (toDeleteItems.length > 0 && Platform.OS !== 'web') {
+      const result = await safeDelete({
+        items: toDeleteItems.map(i => ({
+          name: i.assetId,
+          estimatedBytes: i.bytes,
+          assetId: i.assetId,
+        })),
+        category: 'Duplicate Photos',
+        safeMode,
+      });
+      bytesActuallyFreed = result.bytesFreed;
+      itemsRemoved = result.deleted;
+      if (result.skipped > 0) logWarn('DuplicateFinder', `${result.skipped} asset(s) skipped — no longer found`);
+      if (result.failed > 0) logWarn('DuplicateFinder', `${result.failed} asset(s) failed to delete`);
     }
 
+    logInfo('DuplicateFinder', `Clean complete — freed ${bytesActuallyFreed} bytes, removed ${itemsRemoved} item(s)`);
     await sleep(800);
     setBytesFreed(bytesActuallyFreed);
     if (bytesActuallyFreed > 0 || itemsRemoved > 0) {
@@ -520,7 +537,7 @@ export default function DuplicateFinderScreen() {
         date: new Date().toISOString(),
         bytesFreed: bytesActuallyFreed,
         type: 'duplicates',
-        label: `Duplicate Finder — ${itemsRemoved} file${itemsRemoved !== 1 ? 's' : ''} removed`,
+        label: `Duplicate Finder — ${itemsRemoved} file${itemsRemoved !== 1 ? 's' : ''} removed${safeMode ? ' [SAFE MODE]' : ''}`,
       });
     }
     await addJournalEntry({
@@ -535,7 +552,7 @@ export default function DuplicateFinderScreen() {
     });
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
+  }, [totalSelectedCount, groups, safeMode, addHistoryItem, addJournalEntry, storageStats, totalWasted, totalSelectedBytes]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -842,7 +859,7 @@ export default function DuplicateFinderScreen() {
           <Text style={[styles.footerSub, { color: colors.mutedForeground }]}>
             {totalSelectedCount} DUPES  ·  {formatBytes(totalSelectedBytes)}
           </Text>
-          <Pressable onPress={handleClean} disabled={totalSelectedCount === 0 || phase === 'cleaning'} style={styles.fullWidth}>
+          <Pressable onPress={() => setShowConfirm(true)} disabled={totalSelectedCount === 0 || phase === 'cleaning'} style={styles.fullWidth}>
             <View style={[styles.primaryBtn, {
               backgroundColor: totalSelectedCount > 0 ? accentGreen : colors.muted,
               borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
@@ -861,6 +878,16 @@ export default function DuplicateFinderScreen() {
           </Pressable>
         </View>
       )}
+
+      <ConfirmDeleteSheet
+        visible={showConfirm}
+        category="Duplicate Photos"
+        fileCount={totalSelectedCount}
+        totalBytes={totalSelectedBytes}
+        safeMode={safeMode}
+        onCancel={() => setShowConfirm(false)}
+        onConfirm={handleClean}
+      />
     </View>
   );
 }

@@ -1,61 +1,78 @@
 /**
- * CleanDroid — lightweight error logger.
+ * CleanDroid structured logger.
  *
- * On dev builds: forwards every call to console.error so it appears in the
- * Metro/Expo log immediately.
+ * Levels: DEBUG < INFO < WARN < ERROR
  *
- * On production builds: accumulates up to MAX_LOG_ENTRIES entries in a
- * circular in-memory ring buffer. The ring is exposed via getErrorLog() so
- * Settings can render it as a copy-pasteable bug-report payload.
+ * All entries are stored in a 50-entry circular ring readable from Settings.
+ * DEBUG entries are only stored in __DEV__ builds.
  *
- * The ring is never written to AsyncStorage — it is diagnostic only and
- * resets on every app launch. This keeps the logger zero-cost at startup.
+ * Usage:
+ *   logDebug('Tag', 'verbose detail');
+ *   logInfo('Tag', 'scan started');
+ *   logWarn('Tag', 'file not found, skipping');
+ *   logError('Tag', err);  // accepts Error or unknown
+ *
+ * Read / clear the ring from the Error Log in Settings:
+ *   getErrorLog()    → LogEntry[]
+ *   clearErrorLog()  → void
  */
 
-const MAX_LOG_ENTRIES = 50;
+export type LogLevel = 'DEBUG' | 'INFO' | 'WARN' | 'ERROR';
 
 export interface LogEntry {
-  /** ISO timestamp of the error */
-  timestamp: string;
-  /** Short category label, e.g. "scanMediaLibrary", "persistFingerprintCache" */
+  ts: string;        // ISO timestamp
+  level: LogLevel;
   tag: string;
-  /** Human-readable error message */
   message: string;
 }
 
+const MAX_RING = 50;
 const _ring: LogEntry[] = [];
 
-/**
- * Record an error. Replaces every silent `catch {}` in the codebase.
- *
- * @param tag   Short category for filtering (e.g. "hash", "loadPersisted")
- * @param err   The caught value — can be any thrown type
- */
+function push(level: LogLevel, tag: string, message: string) {
+  const entry: LogEntry = { ts: new Date().toISOString(), level, tag, message };
+  if (_ring.length >= MAX_RING) _ring.shift();
+  _ring.push(entry);
+}
+
+// ── Public API ────────────────────────────────────────────────────────────────
+
+/** Verbose diagnostics — only stored and forwarded to console in __DEV__. */
+export function logDebug(tag: string, message: string): void {
+  if (!__DEV__) return;
+  push('DEBUG', tag, message);
+  console.debug(`[DBG][${tag}] ${message}`);
+}
+
+/** Normal operational events (scan started, permission granted, etc.). */
+export function logInfo(tag: string, message: string): void {
+  push('INFO', tag, message);
+  if (__DEV__) console.info(`[INF][${tag}] ${message}`);
+}
+
+/** Non-fatal issues (file skipped, unexpected state). */
+export function logWarn(tag: string, message: string): void {
+  push('WARN', tag, message);
+  if (__DEV__) console.warn(`[WRN][${tag}] ${message}`);
+}
+
+/** Errors — accepts an Error object or any unknown thrown value. */
 export function logError(tag: string, err: unknown): void {
-  const message =
-    err instanceof Error
-      ? `${err.name}: ${err.message}`
-      : String(err);
-
-  if (__DEV__) {
-    // eslint-disable-next-line no-console
-    console.error(`[CleanDroid/${tag}]`, err);
-  }
-
-  _ring.push({ timestamp: new Date().toISOString(), tag, message });
-
-  // Trim to capacity — splice from the front to evict oldest entries
-  if (_ring.length > MAX_LOG_ENTRIES) {
-    _ring.splice(0, _ring.length - MAX_LOG_ENTRIES);
-  }
+  const message = err instanceof Error
+    ? `${err.name}: ${err.message}`
+    : String(err);
+  push('ERROR', tag, message);
+  if (__DEV__) console.error(`[ERR][${tag}] ${message}`);
 }
 
-/** Return a read-only snapshot of the error ring (newest entry last). */
-export function getErrorLog(): ReadonlyArray<LogEntry> {
-  return _ring;
+// ── Ring accessors ────────────────────────────────────────────────────────────
+
+/** Returns all stored log entries, newest first. */
+export function getErrorLog(): LogEntry[] {
+  return [..._ring].reverse();
 }
 
-/** Clear the error ring — exposed for the Settings "Clear Log" action. */
+/** Clears the in-memory ring. */
 export function clearErrorLog(): void {
   _ring.length = 0;
 }

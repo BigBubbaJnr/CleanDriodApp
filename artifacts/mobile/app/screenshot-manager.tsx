@@ -13,7 +13,10 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner } from '@/context/CleanerContext';
 import { SCAN_CAP_TOOL } from '@/constants/limits';
-import { logError } from '@/utils/logger';
+import { logError, logInfo, logWarn } from '@/utils/logger';
+import { safeDelete } from '@/services/SafeDelete';
+import ConfirmDeleteSheet from '@/components/ConfirmDeleteSheet';
+import * as Linking from 'expo-linking';
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
 import { formatBytes, formatDateShort } from '@/utils/format';
@@ -44,7 +47,7 @@ function estimateScreenshotSize(w: number, h: number): number {
 export default function ScreenshotManagerScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem, addJournalEntry, storageStats, richScanData } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats, richScanData, safeMode } = useCleaner();
 
   const [phase, setPhase] = useState<'idle' | 'loading' | 'verifying' | 'results' | 'deleting' | 'done' | 'error'>('idle');
   const scanStartRef = useRef<number>(0);
@@ -52,6 +55,8 @@ export default function ScreenshotManagerScreen() {
   const [screenshots, setScreenshots] = useState<ScreenshotItem[]>([]);
   const [loadStatus, setLoadStatus] = useState('');
   const [freedBytes, setFreedBytes] = useState(0);
+  const [showConfirm, setShowConfirm] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
@@ -72,10 +77,13 @@ export default function ScreenshotManagerScreen() {
 
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== 'granted') {
-      setLoadStatus('[!] permission denied');
+      logWarn('Screenshots', 'Media permission denied');
+      setPermissionDenied(true);
       setPhase('results');
       return;
     }
+    setPermissionDenied(false);
+    logInfo('Screenshots', 'Media permission granted');
 
     // ── Fast path: use cached Storage Intelligence data (< 30 min old) ────────
     const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
@@ -170,26 +178,38 @@ export default function ScreenshotManagerScreen() {
   const selectedSize = selected.reduce((acc, s) => acc + s.estimatedSize, 0);
   const totalSize = screenshots.reduce((acc, s) => acc + s.estimatedSize, 0);
 
-  const handleDelete = async () => {
+  const handleDelete = useCallback(async () => {
+    setShowConfirm(false);
     if (selected.length === 0) return;
     setPhase('deleting');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    logInfo('Screenshots', `Delete started — ${selected.length} screenshot(s), safeMode=${safeMode}`);
+
+    let bytesActuallyFreed = 0;
 
     if (Platform.OS !== 'web') {
-      try {
-        await MediaLibrary.deleteAssetsAsync(selected.map(s => s.assetId));
-      } catch (err) {
-        logError('screenshots/delete', err);
-      }
+      const result = await safeDelete({
+        items: selected.map(s => ({
+          name: s.filename,
+          estimatedBytes: s.estimatedSize,
+          assetId: s.assetId,
+        })),
+        category: 'Screenshots',
+        safeMode,
+      });
+      bytesActuallyFreed = result.bytesFreed;
+      if (result.skipped > 0) logWarn('Screenshots', `${result.skipped} screenshot(s) skipped — no longer found`);
+      if (result.failed > 0) logWarn('Screenshots', `${result.failed} screenshot(s) failed to delete`);
+      logInfo('Screenshots', `Delete complete — freed ${bytesActuallyFreed} bytes, removed ${result.deleted} screenshot(s)`);
     }
 
     await sleep(600);
-    setFreedBytes(selectedSize);
+    setFreedBytes(bytesActuallyFreed);
     await addHistoryItem({
       date: new Date().toISOString(),
-      bytesFreed: selectedSize,
+      bytesFreed: bytesActuallyFreed,
       type: 'screenshots',
-      label: `Screenshot Manager — ${selected.length} screenshot${selected.length !== 1 ? 's' : ''} removed`,
+      label: `Screenshot Manager — ${selected.length} screenshot${selected.length !== 1 ? 's' : ''} removed${safeMode ? ' [SAFE MODE]' : ''}`,
     });
     await addJournalEntry({
       timestamp: Date.now(),
@@ -198,13 +218,13 @@ export default function ScreenshotManagerScreen() {
       itemsFound: screenshots.length,
       itemsCleaned: selected.length,
       bytesFound: totalSize,
-      bytesRecovered: selectedSize,
+      bytesRecovered: bytesActuallyFreed,
       totalStorageBytes: storageStats?.totalSpace ?? 0,
     });
     setScreenshots(prev => prev.filter(s => !s.selected));
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
+  }, [selected, safeMode, screenshots, totalSize, storageStats, addHistoryItem, addJournalEntry, selectedSize]);
 
   const bevel = {
     borderTopColor: colors.bevelLight, borderLeftColor: colors.bevelLight,
@@ -294,6 +314,24 @@ export default function ScreenshotManagerScreen() {
         {/* ── RESULTS ── */}
         {(phase === 'results' || phase === 'deleting') && (
           <Animated.View entering={FadeIn} style={{ gap: 12 }}>
+            {/* Permission denied panel */}
+            {permissionDenied && (
+              <View style={[styles.permBox, bevel, { backgroundColor: colors.card }]}>
+                <Feather name="alert-circle" size={20} color={colors.destructive} />
+                <Text style={[styles.permTitle, { color: colors.destructive }]}>{'[!] MEDIA ACCESS REQUIRED'}</Text>
+                <Text style={[styles.permDesc, { color: colors.mutedForeground }]}>
+                  {'Screenshot Manager needs access to your media library. No files are uploaded — all scanning happens on-device.'}
+                </Text>
+                <Pressable
+                  onPress={() => Linking.openSettings()}
+                  style={[styles.permBtn, { borderColor: colors.destructive }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open system settings"
+                >
+                  <Text style={[styles.permBtnText, { color: colors.destructive }]}>{'>> OPEN SETTINGS'}</Text>
+                </Pressable>
+              </View>
+            )}
             {/* Summary */}
             {screenshots.length > 0 && (
               <View style={[styles.summaryPanel, bevel, { backgroundColor: colors.card }]}>
@@ -399,7 +437,7 @@ export default function ScreenshotManagerScreen() {
           <Text style={[styles.footerSub, { color: colors.mutedForeground }]}>
             {selected.length} SELECTED  ·  ~{formatBytes(selectedSize)}
           </Text>
-          <Pressable onPress={handleDelete} disabled={phase === 'deleting'} style={styles.fullWidth}>
+          <Pressable onPress={() => setShowConfirm(true)} disabled={phase === 'deleting'} style={styles.fullWidth}>
             <View style={[styles.primaryBtn, {
               backgroundColor: colors.destructive,
               borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
@@ -419,6 +457,16 @@ export default function ScreenshotManagerScreen() {
           </Pressable>
         </View>
       )}
+
+      <ConfirmDeleteSheet
+        visible={showConfirm}
+        category="Screenshots"
+        fileCount={selected.length}
+        totalBytes={selectedSize}
+        safeMode={safeMode}
+        onCancel={() => setShowConfirm(false)}
+        onConfirm={handleDelete}
+      />
     </View>
   );
 }
@@ -442,6 +490,15 @@ const styles = StyleSheet.create({
   errorMsg: { fontFamily: 'Inter_400Regular', fontSize: 11, letterSpacing: 0.5, lineHeight: 16 },
   retryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14 },
   retryBtnText: { fontFamily: 'Inter_700Bold', fontSize: 13, letterSpacing: 2 },
+
+  permBox: {
+    width: '100%', padding: 20, gap: 10, alignItems: 'center',
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+  },
+  permTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
+  permDesc: { fontSize: 11, fontFamily: 'Inter_400Regular', lineHeight: 17, textAlign: 'center' },
+  permBtn: { borderWidth: 1, paddingHorizontal: 16, paddingVertical: 10, marginTop: 4 },
+  permBtnText: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
 
   loadBox: { width: '100%', padding: 24, gap: 14, alignItems: 'center' },
   loadTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2 },

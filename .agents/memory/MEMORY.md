@@ -3,3 +3,4 @@
 - [CleanDroid stability & Play Store pass](cleandroid-stability-playstore.md) — error hardening, context memo, permission cleanup, settings improvements, accessibility baseline.
 - [CleanDroid Storage Intelligence Engine](cleandroid-storage-engine.md) — unified scan architecture: RichAsset/RichScanData/SmartCategory in context; tool screens use 30-min cache; storage-tree.tsx is new WinDirStat-style screen.
 - [CleanDroid notifications & permission UX](cleandroid-notifications.md) — expo-notifications v57 wired to Schedule tab; privacy policy screen; permission-denied panels in scan screens.
+- [CleanDroid Safe Delete trust pass](cleandroid-safe-delete-trust-pass.md) — safeMode in context; ConfirmDeleteSheet + SafeDelete wired to all 4 cleaners; settings rewrite with developer section.

@@ -23,7 +23,9 @@ import Animated, { FadeIn } from 'react-native-reanimated';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, estimateImageSize, estimateVideoSize, getRealFileSize } from '@/context/CleanerContext';
 import { SCAN_CAP_TOOL, POOL_CONCURRENCY } from '@/constants/limits';
-import { logError } from '@/utils/logger';
+import { logError, logInfo, logWarn } from '@/utils/logger';
+import { safeDelete } from '@/services/SafeDelete';
+import ConfirmDeleteSheet from '@/components/ConfirmDeleteSheet';
 import { runWithPool } from '@/utils/pool';
 import VerifyingPanel from '@/components/VerifyingPanel';
 import { useBevel } from '@/hooks/useBevel';
@@ -100,10 +102,11 @@ const FILTERS: { key: FilterType; label: string }[] = [
 export default function LargeFilesScreen() {
   const colors = useColors();
   const insets = useSafeAreaInsets();
-  const { addHistoryItem, addJournalEntry, storageStats, richScanData } = useCleaner();
+  const { addHistoryItem, addJournalEntry, storageStats, richScanData, safeMode } = useCleaner();
 
   const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done' | 'error'>('idle');
   const [permissionDenied, setPermissionDenied] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const scanStartRef = useRef<number>(0);
   const [scanError, setScanError] = useState<string | null>(null);
   const [files, setFiles] = useState<LargeFile[]>([]);
@@ -329,24 +332,34 @@ export default function LargeFilesScreen() {
     </Pressable>
   ), [filtered, toggleFile, colors, accentAmber]);
 
-  const handleDelete = async () => {
+  const handleDelete = useCallback(async () => {
+    setShowConfirm(false);
     if (selected.length === 0) return;
     setPhase('cleaning');
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+    logInfo('LargeFiles', `Delete started — ${selected.length} file(s), safeMode=${safeMode}`);
 
     let bytesActuallyFreed = 0;
     let itemsRemoved = 0;
-    const ids = selected.filter(f => f.assetId).map(f => f.assetId);
-    if (ids.length > 0 && Platform.OS !== 'web') {
-      try {
-        await MediaLibrary.deleteAssetsAsync(ids);
-        bytesActuallyFreed = selectedSize;
-        itemsRemoved = selected.length;
-      } catch (err) {
-        logError('large-files/delete', err);
-      }
+
+    const mediaItems = selected.filter(f => f.assetId);
+    if (mediaItems.length > 0 && Platform.OS !== 'web') {
+      const result = await safeDelete({
+        items: mediaItems.map(f => ({
+          name: f.name,
+          estimatedBytes: f.size,
+          assetId: f.assetId,
+        })),
+        category: 'Large Files',
+        safeMode,
+      });
+      bytesActuallyFreed = result.bytesFreed;
+      itemsRemoved = result.deleted;
+      if (result.skipped > 0) logWarn('LargeFiles', `${result.skipped} file(s) skipped — no longer found`);
+      if (result.failed > 0) logWarn('LargeFiles', `${result.failed} file(s) failed to delete`);
     }
 
+    logInfo('LargeFiles', `Delete complete — freed ${bytesActuallyFreed} bytes, removed ${itemsRemoved} file(s)`);
     await sleep(800);
     setBytesFreed(bytesActuallyFreed);
     if (bytesActuallyFreed > 0 || itemsRemoved > 0) {
@@ -354,7 +367,7 @@ export default function LargeFilesScreen() {
         date: new Date().toISOString(),
         bytesFreed: bytesActuallyFreed,
         type: 'large_files',
-        label: `Large Files — ${itemsRemoved} file${itemsRemoved !== 1 ? 's' : ''} removed`,
+        label: `Large Files — ${itemsRemoved} file${itemsRemoved !== 1 ? 's' : ''} removed${safeMode ? ' [SAFE MODE]' : ''}`,
       });
     }
     await addJournalEntry({
@@ -369,7 +382,7 @@ export default function LargeFilesScreen() {
     });
     setPhase('done');
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-  };
+  }, [selected, safeMode, files, storageStats, addHistoryItem, addJournalEntry, selectedSize]);
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
@@ -602,7 +615,7 @@ export default function LargeFilesScreen() {
           <Text style={[styles.footerSub, { color: colors.mutedForeground }]}>
             {selected.length} SELECTED  ·  {formatBytes(selectedSize)}
           </Text>
-          <Pressable onPress={handleDelete} disabled={phase === 'cleaning'} style={styles.fullWidth}>
+          <Pressable onPress={() => setShowConfirm(true)} disabled={phase === 'cleaning'} style={styles.fullWidth}>
             <View style={[styles.primaryBtn, {
               backgroundColor: accentAmber,
               borderTopColor: colors.bevelDark, borderLeftColor: colors.bevelDark,
@@ -620,6 +633,16 @@ export default function LargeFilesScreen() {
           </Pressable>
         </View>
       )}
+
+      <ConfirmDeleteSheet
+        visible={showConfirm}
+        category="Large Files"
+        fileCount={selected.length}
+        totalBytes={selectedSize}
+        safeMode={safeMode}
+        onCancel={() => setShowConfirm(false)}
+        onConfirm={handleDelete}
+      />
     </View>
   );
 }

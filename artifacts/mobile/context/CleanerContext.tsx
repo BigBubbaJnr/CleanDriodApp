@@ -126,6 +126,7 @@ interface CleanerContextType {
   totalBytesFreed: number;
   scheduleSettings: ScheduleSettings;
   rootEnabled: boolean;
+  safeMode: boolean;
   refreshStats: () => Promise<void>;
   scanMediaLibrary: (
     onProgress?: (pct: number) => void,
@@ -137,6 +138,7 @@ interface CleanerContextType {
   addJournalEntry: (entry: Omit<ScanJournalEntry, 'id' | 'scanNumber'>) => Promise<void>;
   updateSchedule: (settings: Partial<ScheduleSettings>) => Promise<void>;
   setRootEnabled: (enabled: boolean) => Promise<void>;
+  setSafeMode: (enabled: boolean) => Promise<void>;
 }
 
 const CleanerContext = createContext<CleanerContextType | null>(null);
@@ -145,6 +147,7 @@ const STORAGE_KEYS = {
   HISTORY: 'cleandroid_history',
   SCHEDULE: 'cleandroid_schedule',
   ROOT: 'cleandroid_root',
+  SAFE_MODE: 'cleandroid_safe_mode',
   TOTAL_FREED: 'cleandroid_total_freed',
   SNAPSHOTS: 'cleandroid_snapshots',
   JOURNAL: 'cleandroid_journal',
@@ -178,6 +181,9 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
   const [totalBytesFreed, setTotalBytesFreed] = useState(0);
   const [scheduleSettings, setScheduleSettings] = useState<ScheduleSettings>(DEFAULT_SCHEDULE);
   const [rootEnabled, setRootEnabledState] = useState(false);
+  // Safe Mode: simulate deletions without touching real files.
+  // Default ON in __DEV__ (beta testing), OFF in production builds.
+  const [safeMode, setSafeModeState] = useState(__DEV__);
 
   const refreshStats = useCallback(async () => {
     setIsLoadingStats(true);
@@ -464,18 +470,21 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
 
   const loadPersisted = useCallback(async () => {
     try {
-      const [histRaw, schedRaw, rootRaw, freedRaw, snapsRaw, journalRaw] = await Promise.all([
+      const [histRaw, schedRaw, rootRaw, freedRaw, snapsRaw, journalRaw, safeModeRaw] = await Promise.all([
         AsyncStorage.getItem(STORAGE_KEYS.HISTORY),
         AsyncStorage.getItem(STORAGE_KEYS.SCHEDULE),
         AsyncStorage.getItem(STORAGE_KEYS.ROOT),
         AsyncStorage.getItem(STORAGE_KEYS.TOTAL_FREED),
         AsyncStorage.getItem(STORAGE_KEYS.SNAPSHOTS),
         AsyncStorage.getItem(STORAGE_KEYS.JOURNAL),
+        AsyncStorage.getItem(STORAGE_KEYS.SAFE_MODE),
       ]);
       if (histRaw) setHistory(JSON.parse(histRaw));
       if (schedRaw) setScheduleSettings(JSON.parse(schedRaw));
       if (rootRaw) setRootEnabledState(rootRaw === 'true');
       if (freedRaw) setTotalBytesFreed(Number(freedRaw));
+      // Only apply persisted safe mode if the user has explicitly set it before
+      if (safeModeRaw !== null) setSafeModeState(safeModeRaw === 'true');
       if (snapsRaw) setSnapshots(JSON.parse(snapsRaw));
       if (journalRaw) setJournal(JSON.parse(journalRaw));
     } catch (err) {
@@ -519,16 +528,21 @@ export function CleanerProvider({ children }: { children: React.ReactNode }) {
     await AsyncStorage.setItem(STORAGE_KEYS.ROOT, String(enabled));
   }, []);
 
+  const setSafeMode = useCallback(async (enabled: boolean) => {
+    setSafeModeState(enabled);
+    await AsyncStorage.setItem(STORAGE_KEYS.SAFE_MODE, String(enabled));
+  }, []);
+
   const contextValue = useMemo(() => ({
     storageStats, isLoadingStats, isStatsError, mediaBreakdown, richScanData, scanTruncated,
-    snapshots, history, totalBytesFreed, scheduleSettings, rootEnabled,
+    snapshots, history, totalBytesFreed, scheduleSettings, rootEnabled, safeMode,
     journal, refreshStats, scanMediaLibrary, addScanSnapshot,
-    addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
+    addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled, setSafeMode,
   }), [
     storageStats, isLoadingStats, isStatsError, mediaBreakdown, richScanData, scanTruncated,
-    snapshots, history, totalBytesFreed, scheduleSettings, rootEnabled,
+    snapshots, history, totalBytesFreed, scheduleSettings, rootEnabled, safeMode,
     journal, refreshStats, scanMediaLibrary, addScanSnapshot,
-    addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled,
+    addHistoryItem, addJournalEntry, updateSchedule, setRootEnabled, setSafeMode,
   ]);
 
   return (
