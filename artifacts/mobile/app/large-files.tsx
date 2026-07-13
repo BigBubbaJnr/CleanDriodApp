@@ -32,6 +32,7 @@ import { sleep } from '@/utils/sleep';
 import SegBar from '@/components/SegBar';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import * as Linking from 'expo-linking';
 import * as MediaLibrary from 'expo-media-library';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -102,6 +103,7 @@ export default function LargeFilesScreen() {
   const { addHistoryItem, addJournalEntry, storageStats, richScanData } = useCleaner();
 
   const [phase, setPhase] = useState<'idle' | 'scanning' | 'verifying' | 'results' | 'cleaning' | 'done' | 'error'>('idle');
+  const [permissionDenied, setPermissionDenied] = useState(false);
   const scanStartRef = useRef<number>(0);
   const [scanError, setScanError] = useState<string | null>(null);
   const [files, setFiles] = useState<LargeFile[]>([]);
@@ -135,12 +137,13 @@ export default function LargeFilesScreen() {
     setScanStatus('REQUESTING MEDIA ACCESS...');
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== 'granted') {
-      setScanStatus('[!] permission denied');
-      setScanProgress(100);
+      setPermissionDenied(true);
+      setScanProgress(0);
       setFiles([]);
-      setPhase('results');
+      setPhase('idle');
       return;
     }
+    setPermissionDenied(false);
 
     // ── Fast path: use cached Storage Intelligence data (< 30 min old) ────────
     const CACHE_MAX_AGE_MS = 30 * 60 * 1000;
@@ -471,6 +474,24 @@ export default function LargeFilesScreen() {
           {/* ── IDLE ── */}
           {phase === 'idle' && (
             <Animated.View entering={FadeIn} style={styles.center}>
+              {/* Permission denied panel */}
+              {permissionDenied && (
+                <View style={[styles.permBox, bevel, { backgroundColor: colors.card }]}>
+                  <Feather name="alert-circle" size={20} color={colors.destructive} />
+                  <Text style={[styles.permTitle, { color: colors.destructive }]}>{'[!] MEDIA ACCESS REQUIRED'}</Text>
+                  <Text style={[styles.permDesc, { color: colors.mutedForeground }]}>
+                    {'Large File Scanner needs access to your photo and video library. No files are uploaded — all scanning is on-device.'}
+                  </Text>
+                  <Pressable
+                    onPress={() => Linking.openSettings()}
+                    style={[styles.permBtn, { borderColor: colors.destructive }]}
+                    accessibilityRole="button"
+                    accessibilityLabel="Open system settings"
+                  >
+                    <Text style={[styles.permBtnText, { color: colors.destructive }]}>{'>> OPEN SETTINGS'}</Text>
+                  </Pressable>
+                </View>
+              )}
               <View style={[styles.idleIconBox, bevel, { backgroundColor: colors.card }]}>
                 <Feather name="hard-drive" size={44} color={accentAmber} />
               </View>
@@ -624,6 +645,15 @@ const styles = StyleSheet.create({
   errorMsg: { fontFamily: 'Inter_400Regular', fontSize: 11, letterSpacing: 0.5, lineHeight: 16 },
   retryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14 },
   retryBtnText: { fontFamily: 'Inter_700Bold', fontSize: 13, letterSpacing: 2 },
+
+  permBox: {
+    width: '100%', padding: 20, gap: 10, alignItems: 'center',
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+  },
+  permTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
+  permDesc: { fontSize: 11, fontFamily: 'Inter_400Regular', lineHeight: 17, textAlign: 'center' },
+  permBtn: { borderWidth: 1, paddingHorizontal: 16, paddingVertical: 10, marginTop: 4 },
+  permBtnText: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
 
   idleIconBox: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
   idleTitle: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 3 },

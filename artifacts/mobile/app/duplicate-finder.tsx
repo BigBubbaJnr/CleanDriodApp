@@ -43,6 +43,7 @@ import {
   computeFileFingerprint, persistFingerprintCache, getFingerprintCacheSize,
 } from '@/utils/hash';
 import { router } from 'expo-router';
+import * as Linking from 'expo-linking';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 /**
@@ -119,6 +120,7 @@ export default function DuplicateFinderScreen() {
   const [scanLog, setScanLog] = useState<string[]>([]);
   const [bytesFreed, setBytesFreed] = useState(0);
   const [scanWasTruncated, setScanWasTruncated] = useState(false);
+  const [permissionDenied, setPermissionDenied] = useState(false);
 
   const webTopPad = Platform.OS === 'web' ? 67 : 0;
   const webBottomPad = Platform.OS === 'web' ? 34 : 0;
@@ -147,12 +149,11 @@ export default function DuplicateFinderScreen() {
     addLog('requesting media access...');
     const { status } = await MediaLibrary.requestPermissionsAsync();
     if (status !== 'granted') {
-      addLog('[!] permission denied');
-      setScanProgress(100);
-      setGroups([]);
-      setPhase('results');
+      setPermissionDenied(true);
+      setPhase('idle');
       return;
     }
+    setPermissionDenied(false);
 
     // ── Phase 1: Load photos — from cache or paginated MediaLibrary ─────────
     const CACHE_MAX_AGE_MS = 30 * 60 * 1000; // 30 minutes
@@ -561,6 +562,26 @@ export default function DuplicateFinderScreen() {
         {/* ── IDLE ── */}
         {phase === 'idle' && (
           <Animated.View entering={FadeIn} style={styles.center}>
+            {/* Permission denied panel */}
+            {permissionDenied && (
+              <View style={[styles.permBox, bevel, { backgroundColor: colors.card, borderColor: colors.destructive }]}>
+                <Feather name="alert-circle" size={20} color={colors.destructive} />
+                <Text style={[styles.permTitle, { color: colors.destructive }]}>
+                  {'[!] MEDIA ACCESS REQUIRED'}
+                </Text>
+                <Text style={[styles.permDesc, { color: colors.mutedForeground }]}>
+                  {'Duplicate Finder needs access to your photo library to find duplicate images. No files are uploaded — all scanning happens on-device.'}
+                </Text>
+                <Pressable
+                  onPress={() => Linking.openSettings()}
+                  style={[styles.permBtn, { borderColor: colors.destructive }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open system settings"
+                >
+                  <Text style={[styles.permBtnText, { color: colors.destructive }]}>{'>> OPEN SETTINGS'}</Text>
+                </Pressable>
+              </View>
+            )}
             <View style={[styles.idleIconBox, bevel, { backgroundColor: colors.card }]}>
               <Feather name="copy" size={44} color={accentGreen} />
             </View>
@@ -861,6 +882,15 @@ const styles = StyleSheet.create({
   errorMsg: { fontFamily: 'Inter_400Regular', fontSize: 11, letterSpacing: 0.5, lineHeight: 16 },
   retryBtn: { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 14 },
   retryBtnText: { fontFamily: 'Inter_700Bold', fontSize: 13, letterSpacing: 2 },
+
+  permBox: {
+    width: '100%', padding: 20, gap: 10, alignItems: 'center',
+    borderTopWidth: 2, borderLeftWidth: 2, borderBottomWidth: 2, borderRightWidth: 2,
+  },
+  permTitle: { fontSize: 12, fontFamily: 'Inter_700Bold', letterSpacing: 2, textAlign: 'center' },
+  permDesc: { fontSize: 11, fontFamily: 'Inter_400Regular', lineHeight: 17, textAlign: 'center' },
+  permBtn: { borderWidth: 1, paddingHorizontal: 16, paddingVertical: 10, marginTop: 4 },
+  permBtnText: { fontSize: 11, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
 
   idleIconBox: { width: 88, height: 88, alignItems: 'center', justifyContent: 'center' },
   idleTitle: { fontSize: 16, fontFamily: 'Inter_700Bold', letterSpacing: 3 },

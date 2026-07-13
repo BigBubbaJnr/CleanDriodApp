@@ -7,7 +7,7 @@
  *   - Week-over-week trend comparing last 7 days vs prior 7 days
  *   - Full chronological log
  */
-import React, { useMemo } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Switch, Text, View } from 'react-native';
 import { useColors } from '@/hooks/useColors';
 import { useCleaner, CleanHistoryItem } from '@/context/CleanerContext';
@@ -17,13 +17,21 @@ import { formatBytes, formatAbsoluteDate } from '@/utils/format';
 import { Feather } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import {
+  cancelCleanReminder,
+  getNotificationPermission,
+  isReminderScheduled,
+  requestNotificationPermission,
+  scheduleCleanReminder,
+  type NotifPermission,
+} from '@/utils/notifications';
 
 type Frequency = 'daily' | 'weekly' | 'monthly';
 
 const FREQUENCIES: { value: Frequency; label: string; desc: string }[] = [
-  { value: 'daily', label: 'DAILY', desc: 'Every day at 02:00' },
-  { value: 'weekly', label: 'WEEKLY', desc: 'Every Sunday at 02:00' },
-  { value: 'monthly', label: 'MONTHLY', desc: 'First of month at 02:00' },
+  { value: 'daily', label: 'DAILY', desc: 'Every day at 10:00 AM' },
+  { value: 'weekly', label: 'WEEKLY', desc: 'Every Sunday at 10:00 AM' },
+  { value: 'monthly', label: 'MONTHLY', desc: 'First of month at 10:00 AM' },
 ];
 
 function getNextRun(frequency: Frequency): string {
@@ -124,6 +132,50 @@ export default function ScheduleScreen() {
 
   const bevel = useBevel();
 
+  // ── Notification state ───────────────────────────────────────────────────
+  const [notifPermission, setNotifPermission] = useState<NotifPermission>('undetermined');
+  const [notifScheduled, setNotifScheduled] = useState(false);
+
+  // Check real notification status on mount
+  useEffect(() => {
+    (async () => {
+      const [perm, scheduled] = await Promise.all([
+        getNotificationPermission(),
+        isReminderScheduled(),
+      ]);
+      setNotifPermission(perm);
+      setNotifScheduled(scheduled);
+    })();
+  }, []);
+
+  const handleToggle = useCallback(async (enabled: boolean) => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+    if (enabled) {
+      const perm = await requestNotificationPermission();
+      setNotifPermission(perm);
+      if (perm === 'granted') {
+        const ok = await scheduleCleanReminder(scheduleSettings.frequency);
+        setNotifScheduled(ok);
+      } else {
+        setNotifScheduled(false);
+      }
+    } else {
+      await cancelCleanReminder();
+      setNotifScheduled(false);
+    }
+    updateSchedule({ enabled });
+  }, [scheduleSettings.frequency, updateSchedule]);
+
+  const handleFreqChange = useCallback(async (frequency: Frequency) => {
+    Haptics.selectionAsync();
+    updateSchedule({ frequency });
+    // Reschedule immediately if the schedule is active and we have permission
+    if (scheduleSettings.enabled && notifPermission === 'granted') {
+      const ok = await scheduleCleanReminder(frequency);
+      setNotifScheduled(ok);
+    }
+  }, [scheduleSettings.enabled, notifPermission, updateSchedule]);
+
   const breakdown = useMemo(() => computeTypeBreakdown(history), [history]);
   const trend = useMemo(() => computeWeeklyTrend(history), [history]);
   const maxBreakdownTotal = breakdown.length > 0 ? breakdown[0].total : 1;
@@ -143,13 +195,35 @@ export default function ScheduleScreen() {
       <View style={[styles.divider, { backgroundColor: colors.border }]} />
       <Text style={[styles.sub, { color: colors.mutedForeground }]}>CONFIGURE YOUR AUTO-CLEAN SCHEDULE</Text>
 
-      {/* Coming Soon notice */}
-      <View style={[styles.comingSoonBox, { borderColor: colors.warning + '80', backgroundColor: colors.warning + '0D' }]}>
-        <Text style={[styles.comingSoonTitle, { color: colors.warning }]}>{'[!] BACKGROUND EXECUTION: V1.1'}</Text>
-        <Text style={[styles.comingSoonText, { color: colors.mutedForeground }]}>
-          {'> '} Auto-clean currently runs in the foreground only. Save your preferences here — they will activate automatically when background execution launches.
-        </Text>
-      </View>
+      {/* Notification status banner */}
+      {scheduleSettings.enabled && notifPermission === 'granted' && notifScheduled ? (
+        <View style={[styles.notifActiveBox, { borderColor: colors.success + '80', backgroundColor: colors.success + '0D' }]}>
+          <Feather name="bell" size={13} color={colors.success} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.notifActiveTitle, { color: colors.success }]}>{'[OK] NOTIFICATION ACTIVE'}</Text>
+            <Text style={[styles.notifActiveText, { color: colors.mutedForeground }]}>
+              {'> '} Reminder scheduled — fires at 10:00 AM on your chosen interval. Tap the notification to open CleanDroid.
+            </Text>
+          </View>
+        </View>
+      ) : scheduleSettings.enabled && notifPermission === 'denied' ? (
+        <View style={[styles.notifActiveBox, { borderColor: colors.destructive + '80', backgroundColor: colors.destructive + '0D' }]}>
+          <Feather name="bell-off" size={13} color={colors.destructive} />
+          <View style={{ flex: 1 }}>
+            <Text style={[styles.notifActiveTitle, { color: colors.destructive }]}>{'[!] NOTIFICATION PERMISSION DENIED'}</Text>
+            <Text style={[styles.notifActiveText, { color: colors.mutedForeground }]}>
+              {'> '} Enable notifications for CleanDroid in your device Settings to receive reminders.
+            </Text>
+          </View>
+        </View>
+      ) : !scheduleSettings.enabled ? (
+        <View style={[styles.notifActiveBox, { borderColor: colors.border, backgroundColor: colors.muted }]}>
+          <Feather name="clock" size={13} color={colors.mutedForeground} />
+          <Text style={[styles.notifActiveText, { color: colors.mutedForeground, flex: 1 }]}>
+            {'> '} Enable the schedule to receive a local notification reminder at your chosen interval. No network required.
+          </Text>
+        </View>
+      ) : null}
 
       {/* Toggle */}
       <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
@@ -170,7 +244,7 @@ export default function ScheduleScreen() {
           </View>
           <Switch
             value={scheduleSettings.enabled}
-            onValueChange={v => { Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light); updateSchedule({ enabled: v }); }}
+            onValueChange={handleToggle}
             trackColor={{ false: colors.border, true: colors.primary + '60' }}
             thumbColor={scheduleSettings.enabled ? colors.primary : colors.mutedForeground}
           />
@@ -194,7 +268,7 @@ export default function ScheduleScreen() {
                     idx < FREQUENCIES.length - 1 && { borderBottomWidth: 1, borderBottomColor: colors.border },
                     active && { backgroundColor: colors.primary + '10' },
                   ]}
-                  onPress={() => { Haptics.selectionAsync(); updateSchedule({ frequency: f.value }); }}
+                  onPress={() => handleFreqChange(f.value)}
                 >
                   <View style={[styles.radioOuter, { borderColor: active ? colors.primary : colors.mutedForeground }]}>
                     {active && <View style={[styles.radioInner, { backgroundColor: colors.primary }]} />}
@@ -478,7 +552,7 @@ const styles = StyleSheet.create({
   emptyIcon: { fontSize: 13, fontFamily: 'Inter_700Bold', letterSpacing: 3 },
   emptyText: { fontSize: 11, fontFamily: 'Inter_400Regular', letterSpacing: 1, textAlign: 'center', lineHeight: 18 },
 
-  comingSoonBox: { padding: 12, gap: 6, borderWidth: 1, marginBottom: 16 },
-  comingSoonTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2 },
-  comingSoonText: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3, lineHeight: 15 },
+  notifActiveBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderWidth: 1, marginBottom: 16 },
+  notifActiveTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },
+  notifActiveText: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3, lineHeight: 15 },
 });

@@ -8,10 +8,9 @@ import * as Haptics from 'expo-haptics';
 import * as Linking from 'expo-linking';
 import Constants from 'expo-constants';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { router } from 'expo-router';
 import { getErrorLog, clearErrorLog } from '@/utils/logger';
 
-// Update these before Play Store submission
-const PRIVACY_POLICY_URL = 'https://cleandroid.app/privacy';
 const FEEDBACK_EMAIL = 'mailto:hello@cleandroid.app?subject=CleanDroid%20Feedback';
 
 function SysRow({
@@ -156,7 +155,7 @@ export default function SettingsScreen() {
           icon="file-text"
           label="Privacy Policy"
           value="ALL OPS LOCAL — ZERO NETWORK CALLS"
-          onPress={() => Linking.openURL(PRIVACY_POLICY_URL)}
+          onPress={() => router.push('/privacy-policy')}
         />
         <SysRow
           icon="mail"

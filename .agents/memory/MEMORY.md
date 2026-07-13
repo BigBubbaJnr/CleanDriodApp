@@ -2,3 +2,4 @@
 - [CleanDroid scan journal](cleandroid-scan-journal.md) — ScanJournalEntry in context; persisted to cleandroid_journal; journal shown in Schedule tab replacing EXECUTION LOG.
 - [CleanDroid stability & Play Store pass](cleandroid-stability-playstore.md) — error hardening, context memo, permission cleanup, settings improvements, accessibility baseline.
 - [CleanDroid Storage Intelligence Engine](cleandroid-storage-engine.md) — unified scan architecture: RichAsset/RichScanData/SmartCategory in context; tool screens use 30-min cache; storage-tree.tsx is new WinDirStat-style screen.
+- [CleanDroid notifications & permission UX](cleandroid-notifications.md) — expo-notifications v57 wired to Schedule tab; privacy policy screen; permission-denied panels in scan screens.
