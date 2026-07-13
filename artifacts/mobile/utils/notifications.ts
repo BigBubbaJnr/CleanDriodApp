@@ -12,7 +12,7 @@
  */
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
-import { logError } from './logger';
+import { logError, logDebug } from './logger';
 
 // Fixed identifier — cancelling by ID is safe even if nothing was scheduled.
 const REMINDER_ID = 'cleandroid_clean_reminder';
@@ -51,7 +51,8 @@ export async function getNotificationPermission(): Promise<NotifPermission> {
     const result = await Notifications.getPermissionsAsync() as any;
     if (result.granted) return 'granted';
     return result.canAskAgain ? 'undetermined' : 'denied';
-  } catch {
+  } catch (err) {
+    logError('notifications/getPermission', err);
     return 'undetermined';
   }
 }
@@ -118,8 +119,9 @@ export async function cancelCleanReminder(): Promise<void> {
   if (Platform.OS === 'web') return;
   try {
     await Notifications.cancelScheduledNotificationAsync(REMINDER_ID);
-  } catch {
+  } catch (err) {
     // Safe to ignore — either never scheduled or already cancelled.
+    logDebug('notifications/cancel', `cancel failed: ${err}`);
   }
 }
 
@@ -129,7 +131,8 @@ export async function isReminderScheduled(): Promise<boolean> {
   try {
     const scheduled = await Notifications.getAllScheduledNotificationsAsync();
     return scheduled.some(n => n.identifier === REMINDER_ID);
-  } catch {
+  } catch (err) {
+    logError('notifications/isScheduled', err);
     return false;
   }
 }

@@ -284,21 +284,26 @@ function buildAdvisorCards(
   }
 
   // ── P7: APP CACHE (always shown) ─────────────────────────────────────────
+  // Own app cache is the only value we can measure precisely.
+  // Third-party caches cannot be read on Android 13+ without MANAGE_EXTERNAL_STORAGE.
+  // We show own cache size as a real measured value and do NOT include a made-up
+  // estimate for other apps in recoveryBytes — that would mislead the user.
   const ownCacheBytes = mediaBreakdown?.appCache.size ?? 0;
-  const estimatedOtherCachesMB = 350; // typical for a phone with social + streaming apps
   cards.push({
     id: 'app_cache',
     priority: 7,
     icon: 'cpu',
     category: 'CACHE',
     title: 'APP CACHES CLEARABLE',
-    triggerSummary: `Own cache: ${formatBytes(ownCacheBytes)} · estimated common apps: ~${estimatedOtherCachesMB} MB`,
-    recoveryBytes: ownCacheBytes + estimatedOtherCachesMB * 1024 * 1024,
+    triggerSummary: ownCacheBytes > 0
+      ? `CleanDroid cache: ${formatBytes(ownCacheBytes)} (measured) · other apps: varies — use Smart Sweep`
+      : `CleanDroid cache: empty · other apps: use Smart Sweep to clear individually`,
+    recoveryBytes: ownCacheBytes, // only count what we can actually measure
     safetyLevel: 'SAFE',
     explanation:
-      'App caches are temporary files that apps create to avoid re-downloading data. They are always safe to clear — apps rebuild their cache automatically on next use. Auto-Clear removes CleanDroid\'s own accessible caches immediately. Smart Sweep opens each additional app\'s Settings page so you clear the actual amount with one tap each.',
+      'App caches are temporary files that apps create to avoid re-downloading data. They are always safe to clear — apps rebuild their cache automatically on next use. Auto-Clear removes CleanDroid\'s own accessible cache immediately (the measured value above). Smart Sweep opens each additional app\'s Settings page so you clear the exact amount with one tap each.',
     androidNote:
-      'Android prevents third-party apps from silently clearing other apps\' caches — only the system or the user via Settings can do this. Smart Sweep removes the manual back-and-forth by navigating automatically.',
+      'Android prevents third-party apps from reading or clearing other apps\' caches on Android 13+ without the MANAGE_EXTERNAL_STORAGE permission (which CleanDroid does not request). Smart Sweep navigates you directly to each app\'s storage page so you clear the real value yourself.',
     actionLabel: 'OPEN CACHE CLEANER',
     actionRoute: '/app-cache',
     confidence: 'HIGH',

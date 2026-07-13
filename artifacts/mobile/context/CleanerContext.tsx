@@ -100,7 +100,9 @@ export async function getRealFileSize(uri: string): Promise<number | null> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const info = await FileSystem.getInfoAsync(uri, { size: true } as any);
     if (info.exists) return (info as any).size ?? null;
-  } catch {}
+  } catch (err) {
+    logError('getRealFileSize', err);
+  }
   return null;
 }
 
@@ -164,7 +166,9 @@ async function getOwnCacheSize(): Promise<number> {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const info = await FileSystem.getInfoAsync(FileSystem.cacheDirectory!, { size: true } as any);
     if (info.exists) return (info as any).size ?? 0;
-  } catch {}
+  } catch (err) {
+    logError('getOwnCacheSize', err);
+  }
   return 0;
 }
 

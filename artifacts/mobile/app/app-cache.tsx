@@ -133,20 +133,33 @@ export default function AppCacheScreen() {
     }
   };
 
-  const handleAutoClear = useCallback(async () => {
-    setPhase('auto-clearing');
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
-    let freed = 0;
-    try {
-      const info = await FileSystem.getInfoAsync(FileSystem.cacheDirectory!);
-      if (info.exists) { freed += (info as any).size ?? 0; await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true }); }
-    } catch {}
-    await sleep(1500);
-    setAutoClearedBytes(freed);
-    setTotalFreed(freed);
-    await addHistoryItem({ date: new Date().toISOString(), bytesFreed: freed, type: 'cache', label: 'Auto Cache Clear — own app cache cleared' });
-    setPhase('sweep-ready');
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+  const handleAutoClear = useCallback(() => {
+    Alert.alert(
+      'CLEAR CLEANDROID CACHE?',
+      'This removes CleanDroid\'s own temporary files. Your scan history and settings are not affected.',
+      [
+        { text: 'CANCEL', style: 'cancel' },
+        {
+          text: 'CLEAR',
+          style: 'destructive',
+          onPress: async () => {
+            setPhase('auto-clearing');
+            Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Heavy);
+            let freed = 0;
+            try {
+              const info = await FileSystem.getInfoAsync(FileSystem.cacheDirectory!);
+              if (info.exists) { freed += (info as any).size ?? 0; await FileSystem.deleteAsync(FileSystem.cacheDirectory!, { idempotent: true }); }
+            } catch {}
+            await sleep(1500);
+            setAutoClearedBytes(freed);
+            setTotalFreed(freed);
+            await addHistoryItem({ date: new Date().toISOString(), bytesFreed: freed, type: 'cache', label: 'Auto Cache Clear — own app cache cleared' });
+            setPhase('sweep-ready');
+            Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          },
+        },
+      ]
+    );
   }, [addHistoryItem]);
 
   const handleStartSweep = useCallback(() => {

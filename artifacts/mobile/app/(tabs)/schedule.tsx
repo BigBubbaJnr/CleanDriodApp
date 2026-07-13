@@ -225,10 +225,21 @@ export default function ScheduleScreen() {
         </View>
       ) : null}
 
+      {/* Beta disclosure — clarify what "schedule" actually does */}
+      <View style={[styles.betaNote, {
+        borderColor: colors.warning + '50',
+        backgroundColor: colors.warning + '08',
+      }]}>
+        <Text style={[styles.betaNoteTitle, { color: colors.warning }]}>{'[!] NOTIFICATION REMINDER — NOT AUTO-CLEAN'}</Text>
+        <Text style={[styles.betaNoteText, { color: colors.mutedForeground }]}>
+          {'Enabling the schedule sends a reminder notification at your chosen interval. It does NOT automatically run a clean in the background — you still tap to clean. Background auto-clean is planned for a future release.'}
+        </Text>
+      </View>
+
       {/* Toggle */}
       <View style={[styles.panel, bevel, { backgroundColor: colors.card }]}>
         <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
-          <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[CLEAN SCHEDULE]'}</Text>
+          <Text style={[styles.panelTitle, { color: colors.primary }]}>{'[CLEAN REMINDER]'}</Text>
         </View>
         <View style={styles.toggleRow}>
           <View style={[styles.statusDot, {
@@ -236,10 +247,10 @@ export default function ScheduleScreen() {
           }]} />
           <View style={styles.toggleText}>
             <Text style={[styles.toggleTitle, { color: colors.foreground }]}>
-              {scheduleSettings.enabled ? 'PREFERENCES SAVED' : 'INACTIVE'}
+              {scheduleSettings.enabled ? 'REMINDER ACTIVE' : 'INACTIVE'}
             </Text>
             <Text style={[styles.toggleSub, { color: colors.mutedForeground }]}>
-              {scheduleSettings.enabled ? `CONFIGURED: ${scheduleSettings.frequency.toUpperCase()}` : 'SCHEDULE DISABLED'}
+              {scheduleSettings.enabled ? `NOTIFY ${scheduleSettings.frequency.toUpperCase()} AT 10:00 AM` : 'REMINDER DISABLED'}
             </Text>
           </View>
           <Switch
@@ -555,4 +566,9 @@ const styles = StyleSheet.create({
   notifActiveBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 10, padding: 12, borderWidth: 1, marginBottom: 16 },
   notifActiveTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 2, marginBottom: 4 },
   notifActiveText: { fontSize: 10, fontFamily: 'Inter_400Regular', letterSpacing: 0.3, lineHeight: 15 },
+  betaNote: {
+    borderWidth: 1, padding: 12, gap: 6, marginBottom: 12,
+  },
+  betaNoteTitle: { fontSize: 10, fontFamily: 'Inter_700Bold', letterSpacing: 1.5 },
+  betaNoteText: { fontSize: 10, fontFamily: 'Inter_400Regular', lineHeight: 16, letterSpacing: 0.3 },
 });
