@@ -1,0 +1,200 @@
+# Executive Summary  
+The CleanDroid app is a React Native (Expo) “cleaner” for Android that currently implements only a subset of features compared to mature competitors. Its codebase is well-structured (using TypeScript, expo-router and React Context) and the UI is responsive and straightforward, but **most cleaning functions are incomplete or simulated**. For example, the “Junk Cleaner” screen displays dummy items and merely clears the app’s own cache, rather than scanning real storage. The “Duplicate Finder” only groups media by resolution/duration, not by file content, so it is prone to many false positives. Large-file scanning similarly estimates size by image dimensions and video length, which is inaccurate. The app also lists a fixed set of popular apps for cache clearing rather than dynamically querying installed apps. In short, **core cleaning logic is not fully implemented or accurate**, making the current version mainly a demo.  
+
+By contrast, established apps like CCleaner and SD Maid offer extensive, real scanning (e.g. CCleaner removes call logs, cache, browser history) and true duplicate/photo analysis. Files by Google provides intelligent cleanup suggestions and file management (finding large/duplicate/low-res videos). CleanDroid’s current UX is polished (tabs, retro color scheme, haptic feedback) and privacy-friendly (all on-device, no third-party ads or trackers), but lacks many advanced features. 
+
+In the analysis below, we detail our findings on code quality, architecture, functionality, UX, security, privacy, and performance. We identify missing features and compliance issues (especially around Android storage permissions and app policies). Finally, we give prioritized recommendations (short, mid, long term), a feature comparison table versus CCleaner, Files by Google, and SD Maid SE, suggested beta telemetry and tests, and a data/permissions risk mitigation plan.
+
+## Code Quality  
+The code is written in modern TypeScript/React using the Expo framework. It is mostly consistent and modular: screens are organized under `app/`, there is a shared `CleanerContext` managing state, and utility hooks/components are used throughout. TypeScript strict mode is enabled (good for type safety), and imports use aliases (e.g. `@/hooks`). However, there are **several code-quality gaps**:  
+- **Mocks vs real logic:** Many features use hardcoded or demo data. E.g. *Junk Cleaner* relies on a `generateMockJunk()` function and only deletes `FileSystem.cacheDirectory` (the app’s own cache) instead of scanning files. *Duplicate Finder* uses a simple grouping by width×height or video duration, not actual hashing or image comparison. *App Cache Cleaner* has a fixed list of apps with bogus cache sizes. These shortcuts make the code easier but mean the app isn’t functionally complete.  
+- **Error handling:** Some `try`/`catch` blocks silently swallow errors (empty catch blocks). This can hide failures (e.g. if permission is denied) and hurt reliability.  
+- **Dependencies:** The project uses Expo’s managed workflow (expo-file-system, expo-media-library, expo-intent-launcher, etc.). These are appropriate choices but require correct configuration. Notably, the code imports `expo-file-system/legacy` and native modules; these should be kept updated to supported versions.  
+- **Build/Test:** No automated tests or CI configs are present. A TypeScript type-check script exists in `package.json`, but there is no continuous integration (e.g. GitHub Actions) to run linting, building, or tests on commits. Without test coverage, regressions could slip through. The build system uses pnpm with Expo; make sure to lock dependency versions and possibly set up reproducible EAS or CI builds.  
+
+In summary, **code style is generally clean but partial and lacking testing**. Critical cleaning algorithms need real implementation, and a CI pipeline and tests should be added before a public beta.
+
+## Architecture  & Build System  
+CleanDroid is structured as a single Expo app. A central **CleanerContext** (React Context) manages global state (history of cleans, scheduling settings, root mode flag, etc.), persisted in `AsyncStorage`. The UI is composed of multiple screens navigated via tabs (`expo-router`). Each feature (Junk, Duplicates, Large Files, Cache) is a separate screen component. The architecture is roughly: 
+
+```mermaid
+graph LR
+    UI[UI Screens (React Native)] --> Context[CleanerContext (state & logic)]
+    Context -->|History/Settings| Storage[AsyncStorage]
+    Context -->|File Ops| FS[Expo FileSystem]
+    Context -->|Media Ops| ML[Expo MediaLibrary]
+    Context -->|Launch System| IL[Expo IntentLauncher]
+    ML --> Media[Device MediaStore]
+    FS --> Disk[Device File System]
+    IL --> Settings[Android Settings App]
+```
+
+All actual scanning and deletion calls flow through this central context or component logic, which interacts with Expo APIs. The code **builds** via Expo CLI (`expo start`) and TypeScript. The `app.json` is mostly default; no AndroidManifest is present (Expo will generate it). There is *no CI/CD pipeline*, and no test suite to validate builds. Before beta release, the team should add CI (e.g. GitHub Actions) to run `pnpm install`, type-check, build checks, and any linting automatically. Automated builds (possibly using [Expo EAS](https://docs.expo.dev/build/introduction/)) should also be set up for reproducible release artifacts.
+
+## Features and Competitive Gaps  
+CleanDroid currently advertises **Junk Cleaner, Duplicate Finder, Large Files,** and **Cache Cleaner** (plus a Scheduling UI). Our analysis of the code shows:  
+
+- **Junk Cleaner:** Currently a UI demo. It displays a list of fake junk files (`generateMockJunk()`) and **only deletes the app’s own cache directory** on “Clean”. It does not scan general storage. In contrast, CCleaner truly cleans “application cache, browser history, clipboard content, old call logs and more”, and Files by Google dynamically identifies obsolete files. Thus, CleanDroid’s junk cleaning is not real cleaning – at best it recovers at most its own cache.  
+
+- **Duplicate Finder:** Attempts to identify duplicate **photos**. It requests media-library permission and retrieves up to 500 recent photos, grouping them by resolution (for images) or duration (for videos). **This is a naïve heuristic**: two different photos can share the same resolution, so many false positives or missed duplicates will occur. True duplicates would require hashing or pixel comparison. After grouping, it offers to delete “all but one” of each group using `MediaLibrary.deleteAssetsAsync()`. For comparison, Files by Google gives “space cleanup suggestions” that include duplicate and similar files. CCleaner even finds “similar, old, and poor quality photos”. CleanDroid lacks any notion of “similar” or content-based matching.  
+
+- **Large Files:** Collects up to 200 photos and 100 videos via `MediaLibrary.getAssetsAsync()`, then calculates an estimated size (`width*height*3` for images, `duration*2MB` for videos). It then lists the largest ones over a threshold. This again is **imprecise** (e.g. compressed JPEGs are usually much smaller than width×height×3 bytes). It then deletes selected assets via `MediaLibrary`. While this does find some big media files, it ignores large documents or APKs in storage. SD Maid’s **StorageAnalyzer** and Files by Google both more comprehensively find large items. CleanDroid’s implementation is a starting point but undercounts true sizes and misses non-media files.  
+
+- **Cache Cleaner:** The app offers a two-step “Smart Sweep”. First, it auto-clears the expo cache directory. Then it lists a static set of common app packages with fake cache sizes (Chrome, Instagram, etc.). The user can select some and “Start Smart Sweep”, which sequentially launches each app’s **Android Settings** page (`IntentLauncher.ACTIVITY_APPLICATION_DETAILS_SETTINGS`) so the user can tap “Clear Cache”. This is a clever UI trick, but it does *not* actually read or clear those caches itself. A competitor like CCleaner has built-in cache cleaners for app caches. SD Maid’s AppCleaner can delete caches (even via root). Files by Google typically omits cache cleaning. CleanDroid **does not know actual cache sizes and cannot clear them directly**. To improve, it would need to query `Android.app.usage` or use the deprecated `StorageStatsManager` on Android, or rely on MANAGE_EXTERNAL_STORAGE (which has Google Play implications).  
+
+- **Scheduling:** The app has a UI for scheduling (daily/weekly/monthly cleans) stored in context, but **no background service is implemented**. Expo libraries for background fetch and tasks are included in dependencies, but no task manager is registered. CCleaner periodically reminds users to clean but does not auto-clean without input. SD Maid SE supports scheduled cleanups. CleanDroid currently just records the chosen schedule setting (in AsyncStorage) but never uses it to perform actions. This feature is *not functional* yet.  
+
+**Unique Selling Points:** Unlike the closed-source, ad-supported CCleaner, CleanDroid is advertised as free, open-source, and all processing happens on-device (“No data leaves your phone” in Settings). It does not collect personal data or show ads (as SD Maid notes, “no ads and doesn’t sell your data”). In terms of gaps, CleanDroid is missing numerous competitor capabilities: it has no app-uninstaller, no memory booster or battery optimizer, no photo compression, no offline file sharing, no integrated file explorer, and no backup/restore. CCleaner also provides system monitoring (CPU, RAM, battery). Files by Google offers offline file sharing and cloud backup. SD Maid can remove leftover data of uninstalled apps, apply regex filters, and work with root/ADB for deep cleaning. CleanDroid currently covers only a narrow subset of cleaning tasks, and most of those only superficially.
+
+## User Experience (UX)  
+The app UI is **clean and retro-themed**. It uses tabs (“Clean”, “Schedule”, “Settings”, “NotFound”) with animated feedback. The **layout and style** (beveled buttons, faded colors) are consistent and look polished. The “Clean” tab summarizes storage and offers cards for each tool; it even shows tips like “Run Junk Cleaner first” to guide users. The use of icons (Feather) and haptics for actions is positive. Crucially, the app **advertises “All features free — no subscriptions”** prominently, which can attract users tired of paywalled cleaners. 
+
+However, some UX issues arise from the unimplemented logic:  
+- **Permission flows:** When user starts a scan (e.g. Duplicate or Large), the app requests Media Library permission. The UI should handle “permission denied” gracefully; currently it just stops scanning. CleanDroid should show a prompt explaining why media access is needed. On iOS, MediaLibrary works differently (users may see an empty result if no permission). This needs testing and clarification in UI.  
+- **Feedback and Progress:** The scanner screens show animated tickers and progress bars while “scanning” (e.g. in Duplicate Finder), which is good for perceived performance. But since data is partially synthetic, a user might wonder if it’s real. After scanning, the UI clearly lists groups of duplicates or large files with sizes. When “Clean” is tapped, the app plays success haptics and moves to a summary. These flows are intuitive. However, the actual result (“bytes freed”) is based on estimated sizes, so it can mislead the user if actual files were bigger/smaller. For example, app-cache “Auto-Clear” always reports an extra 280 MB of “accessible caches” by a fixed constant – a user might trust this number. This is **deceptive** unless explained.  
+
+- **Navigation:** The app uses `expo-router` with file-based routes. It works, but one UX quirk is that the “Smart Sweep” flow in Cache Cleaner pops Android Settings activities, which leaves the app. If the user doesn’t return to CleanDroid manually, the flow stalls. There is no “Back to CleanDroid” link. CCleaner solves this by performing cleanups within the app itself. Another issue: toggling “Root mode” (a switch in Settings) shows a confirmation dialog, but since no root functionality is implemented, it does nothing besides set a flag. This could confuse advanced users.  
+
+Overall, the UX is straightforward and user-friendly for an initial app: flat navigation, clear labels, helpful “tip” section, and consistent theming. But the **illusion of functionality** (mock data) may frustrate power users. The UI should be updated to reflect what actually works. For example, label the Junk Cleaner as “Demo mode” or only show real cache info.
+
+## Security and Privacy  
+CleanDroid’s operations are **local-only**: it never calls a network API or advertises any data collection. By design, it keeps all data on-device (history of cleans and schedule in `AsyncStorage`). This is a privacy advantage (SD Maid likewise notes it sells no data). There are currently no third-party analytics or ads. The only sensitive data it touches is the user’s **media library** (photos/videos) when scanning duplicates or large files. This requires runtime permission (`READ_MEDIA_IMAGES`/`READ_EXTERNAL_STORAGE` on Android). CleanDroid requests this at scan time, which is appropriate. Expo’s MediaLibrary API will prompt the user for permission (it “will ask for all possible permissions” on Android by default).  
+
+However, any app that reads media must handle privacy carefully. Google Play’s “Data safety” disclosures would require stating that the app accesses user photos/media (even if not sending them anywhere). CleanDroid’s current claims (“No data leaves your phone”) seem honest, but the developer should still include a privacy policy clarifying this. Also, if the app were extended to scan other files (or use MANAGE_EXTERNAL_STORAGE), it would need to justify that in the Play listing. In fact, **Android 11+ enforces strict rules** on broad storage access: only apps whose core functionality truly requires it may request the `MANAGE_EXTERNAL_STORAGE` permission. The policy warns that this must be directly tied to core functionality and is reviewed by Google. CleanDroid as a cleaning app arguably qualifies as a file-management/utility, but it should still avoid unnecessary permissions. For now it uses MediaStore APIs which are acceptable without all-files permission. If new features are added (e.g. scanning arbitrary folders), consider using the Storage Access Framework or MediaStore first, as recommended.
+
+In terms of security: the code does not expose any credential or backend. It uses Expo’s intent launcher to open system screens, which is safe. There are no dynamic code evals or use of `eval()` or unsafe WebView content. Error handling could be improved (report exceptions instead of ignoring). Because the app can delete files (media assets), it must ensure user consent for each action. Right now, the user explicitly taps “Delete X items” each time, which is good. There is no password protection or encryption needed (it’s a device utility), but the developer should ensure `AsyncStorage` data (history) doesn’t include anything sensitive – it only stores timestamps and bytes freed. This should be fine. Overall, **no obvious vulnerabilities are present**, but the team should remain cautious if adding any network or multi-threading.
+
+## Performance and Battery Impact  
+Most CleanDroid operations are on-demand and use asynchronous APIs. The scanning flows (MediaLibrary and FileSystem calls) run in the background without blocking the UI. By default, Expo’s FileSystem and MediaLibrary operations are offloaded to native threads. For typical phones, scanning a few hundred media assets is fast (a few seconds). The app even shows a progress bar to reassure the user. Battery impact from one-time scans is minimal. The app does not run any continuous background service or wake-lock (the scheduled-clean feature is only a stub), so idle battery drain is negligible.  
+
+However, if large libraries are present, the fixed “first” limits (500 photos, 200 videos) may not capture all items. Scanning beyond these defaults (with pagination) could take longer. On older devices, retrieving 500 assets might run for a few seconds. A future improvement could show approximate progress or handle cancellation if the user aborts. Using hashed comparisons (for duplicates) or reading many files could be CPU/memory-intensive, but that is not currently done.  
+
+Since Expo imposes some overhead (JavaScript engine, bridging), performance is inherently a bit lower than a pure native app, but for this kind of utility it is acceptable. In a beta, we should monitor performance on typical devices (especially with large galleries or low-memory phones). Telemetry (see below) could help track scan times and memory usage. So far, there are no known memory leaks or battery bugs in the code.
+
+## Testing and Reliability  
+No automated tests (unit or integration) exist in the repository. This is a major gap. Before beta, the team should write tests for the logic in `CleanerContext` and the scanning helpers. For example, unit-tests could feed synthetic asset lists into the duplicate-finder algorithm to verify it groups items correctly. Edge cases (empty lists, single-item groups) should be checked. 
+
+**Manual test cases** are also needed:  
+- **Permissions:** Decline or grant media permissions on Android 13+, iOS, ensure the app reacts gracefully (e.g. shows a message if denied).  
+- **Junk Cleaner:** Verify that if the app’s cache is empty, “Clean” does nothing but does not crash. If some cache is present (maybe preload by some action), it reports freed bytes correctly.  
+- **Duplicate Finder:** Use a gallery with known duplicates and ensure the app finds and deletes them. Also test with no duplicates (it should just report none found). Check how it handles mixed photo/video.  
+- **Large Files:** Test on a device with large videos/documents. Does it list them? If none, does it add demo items?  
+- **App Cache Cleaner:** Verify that “Auto-Clear” truly empties expo's cache directory. Test “Smart Sweep”: select apps you have installed and ensure the Android settings page opens correctly (and see if the counter advances).  
+- **Navigation:** Ensure all router links work, “Back” returns properly.  
+- **History and Stats:** After each clean, check that `totalBytesFreed` and history list update. Ensure history persists after app restart (`AsyncStorage`).  
+- **Edge conditions:** Try on an emulator vs real device; landscape vs portrait; no internet vs connected (should not matter as no network use); low-storage scenario.  
+
+Given the current mocks (like the demo junk list and dummy cache sizes), reliability is limited – e.g. “deleted” sizes are fake. The false-positive rate of duplicate grouping needs testing. Any crashes or hangs in scanning should be debugged (catch blocks could be enhanced to log exceptions during beta). Automated UI tests (with Detox or Appium) are recommended to simulate user flows end-to-end.
+
+## Release Readiness Checklist  
+For a beta release on Google Play, review the following:  
+- **App Metadata:** Fill out a comprehensive Play Store listing. The **Data Safety** section must declare all data access: CleanDroid reads photos/media (so list “Photos/Media/Files” under “Data collected”), even if local-only. Provide a link to a **Privacy Policy** (state that no personal data is sent off-device). Confirm the version number (1.0.0 in Settings).  
+- **Permissions:** In `app.json` or a config plugin, explicitly list needed permissions (`android.permission.READ_EXTERNAL_STORAGE`, possibly `ACCESS_MEDIA_LOCATION` on Android 13). Since CleanDroid does *not* use `MANAGE_EXTERNAL_STORAGE`, avoid requesting it. If targeting Android 11+, ensure compliance with the All Files policy. Remove any unused permission (e.g. access to contacts, SMS, camera, etc.) – none are used currently.  
+- **App Signing & Build:** Prepare release keystore for Android. Set up Gradle/Metro config if needed for production builds. If using Expo, run `expo build:android --type app-bundle`. Make sure the build succeeds on the highest target SDK (probably 31+). Test the release build on a real device.  
+- **Dependencies:** Lock versions (pnpm-lock.json is present). Audit dependencies for vulnerabilities (none obvious). Update Expo SDK to a recent stable (SDK 50+). Remove unused devDependencies.  
+- **CI/CD:** Add continuous integration (e.g. GitHub Actions) with steps: install pnpm, cache modules, run `expo prebuild` or `expo start --no-dev` for linting, `pnpm typecheck`. Optionally run `eas build --local` for sanity.  
+- **Test Coverage:** Ensure any critical logic is covered by unit tests. At minimum, run type-check and basic smoke tests on different emulators/devices.  
+- **App Store Guidelines:** Check for compliance: CleanDroid does not handle SMS, call logs, or sensitive device data beyond media, so it is likely not subject to aggressive anti-data rules. It is not a game or targeting kids specifically (should probably be rated “Everyone” or “Teen” at most).  
+- **Monetization & Ads:** Currently none. If planning to add ads or IAP, those need implementation and policy checks. For beta, stick to free.  
+- **Contact Info:** Provide an email or website contact. Add “About” or “Help” sections. The Settings screen has app info, but add an explicit “Feedback” link or “Report a bug” channel.  
+
+Completing this checklist will ensure the app can be submitted to Google Play (and possibly F-Droid, since it’s open source). Note that Google Play will review any cleaning app that requests storage access; providing only MediaLibrary usage (with a clear media-purpose explanation) will help smooth approval.
+
+## Prioritized Recommendations  
+
+- **Short-term (weeks):**  
+  - **Implement Real Scanning Logic (High Effort, High Impact):** Replace all mock data with actual file queries. E.g. use `FileSystem.readDirectoryAsync` (with SAF or mediastore) to find junk files, compare file hashes for duplicates, and query `StorageStatsManager` or `PackageManager` for app cache sizes. This requires significant effort and testing, but is core.  
+  - **Add Automated Tests (Medium Effort):** Write unit tests for each cleaning algorithm and key UI interactions. Integrate a test framework (Jest with react-native-testing-library, or Detox for end-to-end). This improves reliability with moderate effort.  
+  - **Set Up CI Pipeline (Medium Effort):** Configure GitHub Actions or similar to run lint, type-check, and test on every commit.  
+  - **Improve Error Handling (Low Effort):** In each `catch` block, at least log or show an error instead of silent fail. This is quick to fix.  
+  - **Clarify Permissions in UI (Low Effort):** Add dialog/popups explaining why media permission is needed before scanning.  
+  - **Adjust UI Labels (Low Effort):** If not yet implementing full cleaning, label the tools as “Beta” or “Demo” to manage user expectations (minor change).  
+
+- **Medium-term (months):**  
+  - **Enhance Features (High Effort):** Add missing competitive features in priority order: e.g. *Phone Booster* (clear RAM), *Battery Stats*, *Storage Analyzer* with larger file types (downloads, documents), *Media Compression*, and uninstall manager. Each adds complexity (some require new permissions). Est. 2-3 person-months total.  
+  - **Analytics/Telemetry (Medium Effort):** Add optional, privacy-respecting analytics (e.g. Expo’s “Segment” or open-source Matomo). Collect anonymized usage metrics: feature usage frequency, bytes freed, scan durations, crash reports. This helps guide development.  
+  - **Optimize Performance (Medium Effort):** For large media libraries, implement pagination and caching. If needed, spawn scanning tasks (possible via expo-task-manager) to avoid blocking. Keep memory use low.  
+  - **Improve App Cache Cleaning (Medium Effort):** Dynamically list all installed apps with caches. On Android 8+, use StorageStatsManager or `miui-daemon` if available. Implement direct cache clearing if possible (requires MANAGE_EXTERNAL_STORAGE or root). As a compromise, keep intent launcher approach but automate the “return to app” via app state listener.  
+  - **Internationalization (Medium Effort):** Add translations/localization strings. At least support Spanish, Chinese.  
+
+- **Long-term (year+):**  
+  - **Root/Shizuku Support (High Effort):** If targeting power users, allow deeper cleaning via root or Shizuku. This unlocks deleting `/Android/data/` and other protected areas. However, this greatly increases complexity and regulatory scrutiny (Google Play will flag root-required apps). Only pursue if many users request it.  
+  - **Monetization Strategy (Medium Effort):** Decide if and how to monetize (ads, donations, pro features). SD Maid is funded by paid upgrade (no ads). If ads are added, implement carefully to not violate privacy promises.  
+  - **Expanding Platform Support (Medium Effort):** Optimize for iOS if needed (expo supports iOS MediaLibrary too) or integrate with Huawei services where Google Play is unavailable.  
+  - **Continuous Improvement (Ongoing):** Regularly update dependencies, react to user feedback, fix bugs, and refine UI.  
+
+Each recommendation carries risks: major logic changes could introduce bugs (test thoroughly), and requesting new permissions (like for deep cleaning) could delay store approval. Effort estimates assume a small team.
+
+## Comparison with Competitors  
+
+| Feature/Aspect          | CleanDroid (This App)                         | CCleaner – Phone Cleaner | Files by Google       | SD Maid SE   |
+|-------------------------|-----------------------------------------------|-------------------------------------------------------|--------------------------------------|---------------------------------------------|
+| **Cost/License**        | Free, open-source (no license shown)          | Free, with ads and in-app purchases    | Free (no ads, Google-owned)           | Paid pro unlock (also on F-Droid); GPLv3. |
+| **Ads/Tracking**        | None (promises *all on-device*)               | Contains ads, collects data (location, app activity) | No ads (Google likely tracks anonymously) | No ads, no data sale           |
+| **Junk File Cleaning**  | Basic: demo junk list + clears app cache only | Yes: deletes app cache, download leftovers, browser history, etc. | Yes: suggests cleaning of cache, junk files via Smart Cleanup card | Yes: “AppCleaner” removes cache & obsolete files    |
+| **Duplicate Files**     | Yes: photos/videos by resolution (imprecise)  | Yes: finds similar/poor-quality photos        | Yes: identifies large or duplicate files for cleanup | Yes: “Deduplicator” finds duplicate data         |
+| **Large Files Finder**  | Yes: scans media, shows big media (estimates size) | Yes: shows storage usage, find large media/unused files | Yes: finds large videos/files and low-res videos | Yes: “StorageAnalyzer” shows large files and folders  |
+| **App Cache Cleaning**  | Partial: clears app’s own cache; “Smart Sweep” opens each app’s settings for manual clearing | Yes: can clear all app caches automatically | No (focus on files, not caches)       | Yes: “AppCleaner” deletes app caches; CorpseFinder for orphan data |
+| **System Info/Monitor** | No (no CPU/battery stats)                     | Yes: CPU, RAM, battery monitor             | No                                   | Limited: shows storage usage (StorageAnalyzer)              |
+| **Scheduling/Automation**| UI exists but no real scheduling tasks        | Reminders to clean, runs in background via Accessibility | No scheduled tasks (manual use)    | Yes: can schedule cleans (Scheduler)         |
+| **Offline File Share**  | No                                            | No                                                        | Yes: fast encrypted sharing | No                                              |
+| **Backup to Cloud**     | No                                            | No                                                        | Yes: integrate with Google Drive | No                                              |
+| **Root Support**        | UI toggle only (no actual root actions)       | No                                                        | No                                   | Yes: full root support via Shizuku         |
+| **Unique Selling Points** | Open-source, privacy-focused, retro UI      | Well-known brand, broad cleaning + system tools           | Seamless Google integration, smart suggestions | Very thorough cleaning, open source, no ads       |
+
+(References: CCleaner Play Store and website; Files by Google official site; SD Maid SE GitHub.) 
+
+## Suggested Beta Telemetry/Metrics  
+To refine the app during beta, collect anonymized usage metrics (with user consent):  
+- **Feature Usage:** Count how often each tool is opened (junk, duplicates, large, cache). Identify popular vs unused features.  
+- **Cleaning Results:** Log total bytes freed per session, distribution of “junk” vs “duplicates” frees. Track how often users actually delete items versus scanning.  
+- **Scan Performance:** Record average time to complete each scan (e.g. duplicate scan took X seconds on device model Y). Use this to catch performance issues.  
+- **Permissions:** Track if users decline media permission and then give up, so we can improve prompts.  
+- **Crashes/Errors:** Send crash reports (e.g. via Sentry or Firebase) for any uncaught exceptions during scans.  
+- **Navigation Flow:** Which buttons are tapped most, and drop-off points.  
+- **Settings:** How many enable “Root mode” or change schedule (to see if they use these at all).  
+Ensure that telemetry does **not** collect any personal data (no filenames, no device IDs). Use an open analytics tool or build custom with random client IDs. Since privacy is a selling point, make analytics opt-in or at least clearly disclosed.
+
+## Suggested Tests and Manual Test Cases  
+**Automated Tests:**  
+- *Unit Tests:* Validate algorithm logic: e.g. given a list of mock image assets, test that duplicate groups are formed correctly, that “select all” toggles selections, that byte calculations are correct for given inputs. Use Jest/React Native Testing Library to render components like `<DuplicateFinder>` in isolation and simulate button presses.  
+- *UI/Integration Tests:* With a tool like Detox or Appium, script the main flows: grant/deny permissions, perform a scan, select items, confirm deletion, check that `AsyncStorage` history is updated.  
+- *Type Tests:* `tsc --noEmit` already checks typings, but run it on CI to catch errors early.  
+
+**Manual Tests:**  
+- **Junk Cleaner:**  
+  - *Empty Cache:* On a fresh install (no prior runs), “Clean” should report 0 KB freed and not crash.  
+  - *Non-empty Cache:* Populate the expo cache (by navigating the app or adding dummy files), then run Clean; verify the “bytes freed” matches actual cache size.  
+- **Duplicate Finder:**  
+  - *Grant Permission:* Ensure scan finishes and shows actual duplicate groups (you may put the same photo twice on device).  
+  - *Deny Permission:* The app should handle this (ideally show a message). Current code may just do nothing – check it doesn’t crash or freeze.  
+  - *Edge Cases:* If there is only one image or none, the results screen should handle it gracefully (likely it will add demo items if <3 groups).  
+- **Large Files:**  
+  - *Grant/Deny Similar to above.* Verify large videos (e.g. 100 MB) are listed and removed if selected.  
+- **Cache Cleaner:**  
+  - *Auto-Clear:* After use, the app’s cache directory should be empty (you can test by calling `FileSystem.readDirectoryAsync(FileSystem.cacheDirectory)`). The UI should report the same number in “freed” as was actually in the directory.  
+  - *Smart Sweep:* Select one or two apps you have installed and press “Start Smart Sweep”. Confirm that each selected app’s Settings page opens in turn. (After tapping “Clear Cache” and back, it should move to the next). If it doesn’t continue, note this UX bug.  
+- **Schedule:**  
+  - Change frequency to daily/weekly/monthly and restart the app; ensure the setting persists. (No actual background run occurs, so just confirm persistence.)  
+- **Settings:**  
+  - Toggle “Root mode” on and off and see that it changes state (it should prompt on enabling). Test that “Privacy: All cleaning on-device” is informative.  
+- **General:**  
+  - Test on both Android (various API levels, especially 12/13 with scoped storage changes) and iOS (expo will allow build to iOS – verify that media scans work on iOS photos library).  
+  - Simulate low-battery/low-storage conditions.  
+  - Check for UI overflow/overlap on small screens or large font sizes.  
+
+Document all failures and fix them before release. Given the current demo logic, set user expectations accordingly.
+
+## Risk Mitigation for Data and Permissions  
+- **Minimize Permissions:** Only request the minimal permissions needed. Currently, that is just the media-library. Avoid `MANAGE_EXTERNAL_STORAGE` unless absolutely necessary, as Google Play restricts it. If possible, use Android’s SAF (ACTION_OPEN_DOCUMENT_TREE) for any folder browsing to stay within scoped storage rules.  
+- **User Consent & Clarity:** Before deleting anything (especially photos), show a confirmation dialog listing items to be deleted. This prevents accidental data loss. If Android pops up its own confirmation (for Settings), make sure instructions are clear.  
+- **Handle Denials Gracefully:** If the user denies access, the app should explain what features are unavailable. For example, disable the Duplicate/Large buttons and show an alert telling the user that media access is required for that feature.  
+- **No Unnecessary Data:** Do not collect any personal info (e.g. email or device ID) unless implementing an opt-in account or telemetry. Even telemetry should avoid storing any content of scanned files – only counts and sizes.  
+- **Secure Storage:** The app’s AsyncStorage is not encrypted; this is fine for non-sensitive data (bytes freed, dates). If you ever store something like user identifiers, use SecureStore or encrypted preferences.  
+- **Privacy Policy:** Even with on-device use only, publish a short Privacy Policy stating that no user data is uploaded or shared. This helps compliance and user trust. Mention any analytics or crash-reporting tool used.  
+- **Compliance with Play Policies:** Do not use Accessibility or SMS permissions without a strong necessity, as these trigger additional reviews. (CCleaner uses Accessibility to kill apps; if CleanDroid ever added a “Stop All Apps” feature, we would need to implement an `AccessibilityService` which is a complex commitment and must be fully disclosed.)  
+- **Error Logging:** If logging for debugging (e.g. in a future crash-report service), strip any file paths or content that could identify user data.  
+
+By following the principle of “least privilege” and transparency, we can ensure user data stays safe. Given CleanDroid’s all-device promise, it should stick to it rigorously.
+
+**Sources:** Feature comparisons and design insights are drawn from CCleaner’s official site, Google’s Files pages, and SD Maid SE documentation. Android storage guidelines are from Google’s developer docs. All cleaning logic observations are based on the provided CleanDroid code.
